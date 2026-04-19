@@ -3,7 +3,11 @@ import Register from './components/Register';
 import Login from './components/Login';
 import Chat from './components/Chat';
 
-function ProtectedRoute({ children }) {
+interface ProtectedRouteProps {
+  children: React.ReactNode;
+}
+
+function ProtectedRoute({ children }: ProtectedRouteProps): React.ReactNode {
   const token = localStorage.getItem('token');
   if (!token) {
     return <Navigate to="/login" />;
@@ -11,7 +15,11 @@ function ProtectedRoute({ children }) {
   return children;
 }
 
-function PublicRoute({ children }) {
+interface PublicRouteProps {
+  children: React.ReactNode;
+}
+
+function PublicRoute({ children }: PublicRouteProps): React.ReactNode {
   const token = localStorage.getItem('token');
   if (token) {
     return <Navigate to="/chat" />;
@@ -19,7 +27,7 @@ function PublicRoute({ children }) {
   return children;
 }
 
-function App() {
+function App(): JSX.Element {
   return (
     <BrowserRouter>
       <Routes>

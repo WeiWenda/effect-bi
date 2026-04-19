@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "antd/dist/reset.css";
 
 @theme {
   --color-primary: #3b82f6;
@@ -41,4 +42,8 @@ input, button, textarea {
 
 button {
   cursor: pointer;
+}
+
+:where(.css-dev-only-do-not-override-1i25e9v).ant-menu-inline .ant-menu-item {
+  width: 100%;
 }
