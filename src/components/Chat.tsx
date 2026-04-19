@@ -10,8 +10,8 @@ import {
   MessageOutlined
 } from '@ant-design/icons';
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
-import { useLangGraphRuntime } from '@assistant-ui/react-langgraph';
-import Thread from './assistant-ui/Thread';
+import { useLangGraphRuntime, LangGraphMessagesEvent, LangChainMessage } from '@assistant-ui/react-langgraph';
+import { Thread } from './assistant-ui/thread';
 import { authAPI, Session } from '../services/api';
 
 const { Sider, Content, Header } = Layout;
@@ -148,14 +148,6 @@ function ChatContent(): JSX.Element {
     navigate('/login');
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-gray-500">加载中...</div>
-      </div>
-    );
-  }
-
   const runtime = useLangGraphRuntime({
     stream: async (messages, { abortSignal }) => {
       const sessionToken = sessionTokens[currentSessionId || ''];
@@ -167,30 +159,83 @@ function ChatContent(): JSX.Element {
       localStorage.setItem('token', sessionToken);
 
       try {
+        const transformedMessages = messages.map(msg => ({
+          role: msg.type === 'human' ? 'user' : 'assistant',
+          content: msg.content,
+        }));
+
         const response = await fetch('/api/v1/chatbot/chat/stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${sessionToken}`,
           },
-          body: JSON.stringify({ messages }),
+          body: JSON.stringify({ messages: transformedMessages }),
           signal: abortSignal,
         });
 
-        return response.body as ReadableStream;
+        const reader = response.body?.getReader();
+
+        return new ReadableStream({
+          async start(controller) {
+            if (!reader) {
+              controller.close();
+              return;
+            }
+
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                  break;
+                }
+
+                const chunk = new TextDecoder().decode(value);
+                const lines = chunk.split('\n').filter(line => line.trim());
+
+                for (const line of lines) {
+                  try {
+                    const data = JSON.parse(line.replace('data:', ''));
+                    
+                    const event: LangGraphMessagesEvent<LangChainMessage> = {
+                      event: 'messages/complete',
+                      data: [{
+                        type: 'ai',
+                        content: data.content,
+                      }]
+                    };
+
+                    controller.enqueue(event);
+                  } catch (error) {
+                    console.error('Failed to parse stream chunk:', error);
+                  }
+                }
+              }
+            } catch (error) {
+              console.error('Stream error:', error);
+              controller.error(error);
+            } finally {
+              reader.releaseLock();
+              controller.close();
+            }
+          },
+          cancel() {
+            reader?.cancel();
+          },
+        });
       } finally {
         localStorage.setItem('token', originalToken || '');
       }
-    },
-    create: async () => {
-      const response: Session = await authAPI.createSession();
-      setSessionTokens(prev => ({
-        ...prev,
-        [response.session_id]: response.token.access_token,
-      }));
-      return { externalId: response.session_id };
-    },
+    }
   });
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-gray-500">加载中...</div>
+      </div>
+    );
+  }
 
   return (
     <Layout className="h-screen">
@@ -213,81 +258,84 @@ function ChatContent(): JSX.Element {
           </div>
         </div>
 
-        <Button
-          type="primary"
-          block
-          icon={<PlusSquareOutlined />}
-          onClick={createNewSession}
-          className="m-3"
-        >
-          新增 Chat
-        </Button>
+        <div className="pl-2 pr-2 pb-5">
+          <Button
+            type="primary"
+            block
+            icon={<PlusSquareOutlined />}
+            onClick={createNewSession}
+          >
+            新增 Chat
+          </Button>
+        </div>
 
-        <Menu
-          mode="inline"
-          selectedKeys={currentSessionId ? [currentSessionId] : []}
-          className="flex-1"
-        >
-          {sessions.length === 0 ? (
-            <Menu.Item key="empty" disabled>
-              <MessageOutlined />
-              暂无会话
-            </Menu.Item>
-          ) : (
-            sessions.map(session => (
-              <Menu.Item key={session.id} onClick={() => setCurrentSessionId(session.id)}>
-                {editingSessionId === session.id ? (
-                  <div className="flex items-center gap-2 w-full">
-                    <input
-                      type="text"
-                      value={editName}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEditName(e.target.value)}
-                      autoFocus
-                      onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                        if (e.key === 'Enter') handleUpdateSessionName(session.id);
-                        else if (e.key === 'Escape') setEditingSessionId(null);
-                      }}
-                      className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none"
-                    />
-                    <Button
-                      type="text"
-                      icon={<EditOutlined />}
-                      onClick={() => handleUpdateSessionName(session.id)}
-                    />
-                    <Button
-                      type="text"
-                      onClick={() => setEditingSessionId(null)}
-                    >
-                      取消
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between w-full">
-                    <div className="flex-1 min-w-0">
-                      <span className="truncate">{session.name}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
+        <div className="pl-2 pr-2">
+          <Menu
+            mode="inline"
+            selectedKeys={currentSessionId ? [currentSessionId] : []}
+            className="flex-1"
+          >
+            {sessions.length === 0 ? (
+              <Menu.Item key="empty" disabled>
+                <MessageOutlined />
+                暂无会话
+              </Menu.Item>
+            ) : (
+              sessions.map(session => (
+                <Menu.Item key={session.id} onClick={() => setCurrentSessionId(session.id)}>
+                  {editingSessionId === session.id ? (
+                    <div className="flex items-center gap-2 w-full">
+                      <input
+                        type="text"
+                        value={editName}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEditName(e.target.value)}
+                        autoFocus
+                        onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                          if (e.key === 'Enter') handleUpdateSessionName(session.id);
+                          else if (e.key === 'Escape') setEditingSessionId(null);
+                        }}
+                        className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none"
+                      />
                       <Button
                         type="text"
                         icon={<EditOutlined />}
-                        onClick={() => {
-                          setEditingSessionId(session.id);
-                          setEditName(session.name);
-                        }}
+                        onClick={() => handleUpdateSessionName(session.id)}
                       />
-                      <Popconfirm
-                        title="确定删除该会话？"
-                        onConfirm={() => handleDeleteSession(session.id)}
+                      <Button
+                        type="text"
+                        onClick={() => setEditingSessionId(null)}
                       >
-                        <Button type="text" danger icon={<DeleteOutlined />} />
-                      </Popconfirm>
+                        取消
+                      </Button>
                     </div>
-                  </div>
-                )}
-              </Menu.Item>
-            ))
-          )}
-        </Menu>
+                  ) : (
+                    <div className="flex items-center justify-between w-full">
+                      <div className="flex-1 min-w-0">
+                        <span className="truncate">{session.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          type="text"
+                          icon={<EditOutlined />}
+                          onClick={() => {
+                            setEditingSessionId(session.id);
+                            setEditName(session.name);
+                          }}
+                        />
+                        <Popconfirm
+                          title="确定删除该会话？"
+                          onConfirm={() => handleDeleteSession(session.id)}
+                        >
+                          <Button type="text" danger icon={<DeleteOutlined />} />
+                        </Popconfirm>
+                      </div>
+                    </div>
+                  )}
+                </Menu.Item>
+              ))
+            )}
+          </Menu>
+        </div>
       </Sider>
 
       <Content className="flex flex-col">
