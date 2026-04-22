@@ -1,20 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Layout, Menu, Button, Avatar, Popconfirm, message } from 'antd';
-import { 
-  PlusSquareOutlined, 
-  LogoutOutlined, 
-  DeleteOutlined, 
-  EditOutlined, 
-  UserOutlined,
-  MessageOutlined
-} from '@ant-design/icons';
+import {
+  PlusIcon,
+  LogOutIcon,
+  Trash2Icon,
+  PencilIcon,
+  UserIcon,
+  MessageSquareIcon,
+  XIcon,
+  CheckIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
+} from 'lucide-react';
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import { useLangGraphRuntime, LangGraphMessagesEvent, LangChainMessage } from '@assistant-ui/react-langgraph';
 import { Thread } from './assistant-ui/thread';
-import { authAPI, Session } from '../services/api';
-
-const { Sider, Content, Header } = Layout;
+import { authAPI, chatAPI, Session, tokenStorage, threadListAdapter } from '../services/api';
+import { useToast } from './ui/toast';
+import { ConfirmDialog } from './ui/confirm-dialog';
 
 interface ChatSession {
   id: string;
@@ -22,7 +25,7 @@ interface ChatSession {
   updatedAt: Date;
 }
 
-function ChatContent(): JSX.Element {
+function ChatContent(): React.JSX.Element {
   const [user, setUser] = useState<{ email: string } | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -30,11 +33,19 @@ function ChatContent(): JSX.Element {
   const [loading, setLoading] = useState<boolean>(true);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editName, setEditName] = useState<string>('');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; sessionId: string | null }>({
+    open: false,
+    sessionId: null,
+  });
+  const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
+  const [sessionMessages, setSessionMessages] = useState<Record<string, LangChainMessage[]>>({});
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   const fetchUser = useCallback(async (): Promise<void> => {
     try {
-      const token = localStorage.getItem('token');
+      const token = tokenStorage.getUserToken();
       if (!token) {
         navigate('/login');
         return;
@@ -52,9 +63,10 @@ function ChatContent(): JSX.Element {
         id: s.session_id,
         name: s.name,
         updatedAt: new Date(),
-      }));
+      })).reverse();
       setSessions(sessionList);
 
+      // Cache session tokens
       const tokens: Record<string, string> = {};
       response.forEach(s => {
         tokens[s.session_id] = s.token.access_token;
@@ -62,7 +74,7 @@ function ChatContent(): JSX.Element {
       setSessionTokens(tokens);
 
       if (response.length > 0) {
-        setCurrentSessionId(response[0].session_id);
+        setCurrentSessionId(sessionList[0].id);
       }
     } catch (err) {
       console.error('Failed to fetch sessions:', err);
@@ -79,34 +91,51 @@ function ChatContent(): JSX.Element {
       };
       setSessions(prev => [newSession, ...prev]);
       setCurrentSessionId(response.session_id);
-      setSessionTokens(prev => ({
-        ...prev,
-        [response.session_id]: response.token.access_token,
-      }));
-      message.success('会话创建成功');
+      tokenStorage.setSessionToken(response.token.access_token);
+      toast('会话创建成功');
     } catch (err) {
-      message.error('创建会话失败');
+      toast('创建会话失败', 'error');
       console.error('Failed to create session:', err);
     }
-  }, []);
+  }, [toast]);
 
   const handleDeleteSession = async (sessionId: string): Promise<void> => {
     try {
-      const token = sessionTokens[sessionId];
-      const originalToken = localStorage.getItem('token');
-      localStorage.setItem('token', token);
+      // Save current session token to restore later if needed
+      const currentToken = tokenStorage.getSessionToken();
+
+      // Set the session token to the token of the session being deleted
+      const sessionToken = sessionTokens[sessionId];
+      if (sessionToken) {
+        tokenStorage.setSessionToken(sessionToken);
+      }
+
       await authAPI.deleteSession(sessionId);
-      localStorage.setItem('token', originalToken || '');
 
       setSessions(prev => prev.filter(s => s.id !== sessionId));
 
       if (currentSessionId === sessionId) {
         const remainingSessions = sessions.filter(s => s.id !== sessionId);
         setCurrentSessionId(remainingSessions.length > 0 ? remainingSessions[0].id : null);
+        if (remainingSessions.length > 0) {
+          // Find and set the token for the new current session
+          const session = await authAPI.getSessions();
+          const newSession = session.find(s => s.session_id === remainingSessions[0].id);
+          if (newSession) {
+            tokenStorage.setSessionToken(newSession.token.access_token);
+          }
+        } else {
+          tokenStorage.clearSessionToken();
+        }
+      } else {
+        // Restore the original session token if we deleted a different session
+        if (currentToken) {
+          tokenStorage.setSessionToken(currentToken);
+        }
       }
-      message.success('会话删除成功');
+      toast('会话删除成功');
     } catch (err) {
-      message.error('删除会话失败');
+      toast('删除会话失败', 'error');
       console.error('Failed to delete session:', err);
     }
   };
@@ -115,48 +144,101 @@ function ChatContent(): JSX.Element {
     if (!editName.trim()) return;
 
     try {
-      const token = sessionTokens[sessionId];
-      const originalToken = localStorage.getItem('token');
-      localStorage.setItem('token', token);
       await authAPI.updateSessionName(sessionId, editName);
-      localStorage.setItem('token', originalToken || '');
 
       setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, name: editName } : s));
       setEditingSessionId(null);
       setEditName('');
-      message.success('会话名称更新成功');
+      toast('会话名称更新成功');
     } catch (err) {
-      message.error('更新会话名称失败');
+      toast('更新会话名称失败', 'error');
       console.error('Failed to update session name:', err);
     }
   };
 
-  useEffect(() => {
-    fetchUser();
-  }, [fetchUser]);
-
-  useEffect(() => {
-    if (user) {
-      fetchSessions();
-      setLoading(false);
-    }
-  }, [user, fetchSessions]);
-
   const handleLogout = (): void => {
-    localStorage.removeItem('token');
+    tokenStorage.clearUserToken();
+    tokenStorage.clearSessionToken();
     localStorage.removeItem('user');
     navigate('/login');
   };
 
+  const summarizeAndRenameSession = useCallback(async (
+    sessionId: string,
+    userMessage: string,
+  ): Promise<void> => {
+    try {
+      const response = await fetch('/api/v1/chatbot/chat/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${tokenStorage.getSessionToken()}`,
+        },
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: userMessage }],
+          system_prompt: '简要概括一下用户的问题，不超过20个字，不要输出标点符号和其他多余内容，不需要调用skill和工具，只输出概括内容，不需要其他任何回复',
+        }),
+      });
+
+      const reader = response.body?.getReader();
+      if (!reader) return;
+
+      let summary = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = new TextDecoder().decode(value);
+        const lines = chunk.split('\n').filter(line => line.trim());
+        for (const line of lines) {
+          try {
+            const data = JSON.parse(line.replace('data:', ''));
+            if (data.content) summary += data.content;
+          } catch { /* skip parse errors */ }
+        }
+      }
+
+      reader.releaseLock();
+
+      if (summary.trim()) {
+        await authAPI.updateSessionName(sessionId, summary.trim());
+
+        setSessions(prev => prev.map(s =>
+          s.id === sessionId ? { ...s, name: summary.trim() } : s
+        ));
+      }
+    } catch (err) {
+      console.error('Failed to summarize session name:', err);
+    }
+  }, []);
+
   const runtime = useLangGraphRuntime({
-    stream: async (messages, { abortSignal }) => {
-      const sessionToken = sessionTokens[currentSessionId || ''];
+    stream: async function* (messages, { abortSignal }) {
+      const sessionToken = tokenStorage.getSessionToken();
       if (!sessionToken || !currentSessionId) {
         throw new Error('No session selected');
       }
 
-      const originalToken = localStorage.getItem('token');
-      localStorage.setItem('token', sessionToken);
+      const currentSession = sessions.find(s => s.id === currentSessionId);
+      const isFirstMessage = messages.length === 1 && messages[0].type === 'human';
+      const needsRename = currentSession && !currentSession.name.trim() && isFirstMessage;
+
+      if (needsRename) {
+        const userContent = messages[0].content as string;
+        summarizeAndRenameSession(currentSessionId, userContent);
+      }
+
+      // Add user message to sessionMessages before streaming
+      if (currentSessionId && messages.length > 0) {
+        const lastMessage = messages[messages.length - 1];
+        if (lastMessage.type === 'human') {
+          setSessionMessages(prev => ({
+            ...prev,
+            [currentSessionId]: [...(prev[currentSessionId] || []), lastMessage],
+          }));
+        }
+      }
+
+      let assistantContent = '';
 
       try {
         const transformedMessages = messages.map(msg => ({
@@ -175,116 +257,187 @@ function ChatContent(): JSX.Element {
         });
 
         const reader = response.body?.getReader();
+        if (!reader) return;
 
-        return new ReadableStream({
-          async start(controller) {
-            if (!reader) {
-              controller.close();
-              return;
-            }
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-            try {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) {
-                  break;
-                }
+            const chunk = new TextDecoder().decode(value);
+            const lines = chunk.split('\n').filter(line => line.trim());
 
-                const chunk = new TextDecoder().decode(value);
-                const lines = chunk.split('\n').filter(line => line.trim());
+            for (const line of lines) {
+              try {
+                const data = JSON.parse(line.replace('data:', ''));
+                assistantContent += data.content;
 
-                for (const line of lines) {
-                  try {
-                    const data = JSON.parse(line.replace('data:', ''));
-                    
-                    const event: LangGraphMessagesEvent<LangChainMessage> = {
-                      event: 'messages/complete',
-                      data: [{
-                        type: 'ai',
-                        content: data.content,
-                      }]
-                    };
+                const event: LangGraphMessagesEvent<LangChainMessage> = {
+                  event: 'messages/complete',
+                  data: [{
+                    type: 'ai',
+                    content: data.content,
+                  }]
+                };
 
-                    controller.enqueue(event);
-                  } catch (error) {
-                    console.error('Failed to parse stream chunk:', error);
-                  }
-                }
+                yield event;
+              } catch (error) {
+                console.error('Failed to parse stream chunk:', error);
               }
-            } catch (error) {
-              console.error('Stream error:', error);
-              controller.error(error);
-            } finally {
-              reader.releaseLock();
-              controller.close();
             }
-          },
-          cancel() {
-            reader?.cancel();
-          },
-        });
-      } finally {
-        localStorage.setItem('token', originalToken || '');
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      } catch (error) {
+        console.error('Stream error:', error);
+        throw error;
       }
-    }
+
+      // Add complete assistant message to sessionMessages after streaming
+      if (currentSessionId && assistantContent) {
+        const assistantMessage: LangChainMessage = {
+          type: 'ai',
+          content: assistantContent,
+        };
+        setSessionMessages(prev => ({
+          ...prev,
+          [currentSessionId]: [...(prev[currentSessionId] || []), assistantMessage],
+        }));
+      }
+    },
+    load: async (externalId: string) => {
+      // Return messages from state if already loaded
+      const messages = sessionMessages[externalId];
+      if (messages) {
+        return { messages };
+      }
+      console.log('load from backend', externalId);
+      // Fetch from backend if not loaded
+      try {
+        const messagesResponse = await chatAPI.getMessages();
+        const loadedMessages: LangChainMessage[] = messagesResponse.messages.map(msg => ({
+          type: msg.role === 'user' ? ('human' as const) : ('ai' as const),
+          content: msg.content,
+        }));
+        setSessionMessages(prev => ({
+          ...prev,
+          [externalId]: loadedMessages,
+        }));
+        return { messages: loadedMessages };
+      } catch (error) {
+        console.error('Failed to load messages from backend:', error);
+        return { messages: [] };
+      }
+    },
+    unstable_threadListAdapter: threadListAdapter,
   });
+
+  useEffect(() => {
+    fetchUser();
+  }, [fetchUser]);
+
+  useEffect(() => {
+    if (user) {
+      fetchSessions();
+      setLoading(false);
+    }
+  }, [user, fetchSessions]);
+
+  // Handle session switching
+  useEffect(() => {
+    if (!currentSessionId) return;
+
+    const switchSession = async () => {
+      try {
+        // First, set the session token from cached tokens
+        const sessionToken = sessionTokens[currentSessionId];
+        if (sessionToken) {
+          tokenStorage.setSessionToken(sessionToken);
+        }
+
+        // Then switch to the thread
+        if (runtime.threads && runtime.threads.switchToThread) {
+          await runtime.threads.switchToThread(currentSessionId);
+        }
+      } catch (error) {
+        console.error('Failed to switch session:', error);
+      }
+    };
+
+    switchSession();
+  }, [currentSessionId, sessionTokens, runtime]);
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-gray-500">加载中...</div>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="flex flex-col items-center gap-3">
+          <div className="size-8 animate-spin rounded-full border-2 border-gray-300 border-t-blue-500" />
+          <span className="text-sm text-gray-500">加载中...</span>
+        </div>
       </div>
     );
   }
 
   return (
-    <Layout className="h-screen">
-      <Sider width={280} theme="light">
-        <div className="p-4 border-b">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-semibold text-gray-800">聊天助手</h2>
-            <Button
-              type="text"
-              danger
-              icon={<LogoutOutlined />}
-              onClick={handleLogout}
-            >
-              退出
-            </Button>
-          </div>
-          <div className="flex items-center gap-2">
-            <Avatar icon={<UserOutlined />} />
-            <span className="text-sm text-gray-600">{user?.email}</span>
-          </div>
+    <div className="h-screen flex bg-gray-50">
+      {/* Sidebar */}
+      <aside
+        className={`flex flex-col border-r border-gray-200 bg-white transition-all duration-300 ${
+          sidebarCollapsed ? 'w-0 overflow-hidden border-r-0' : 'w-[280px]'
+        }`}
+      >
+        {/* Sidebar Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <h2 className="font-semibold text-gray-800 text-base">聊天助手</h2>
+          <button
+            onClick={() => setSidebarCollapsed(true)}
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+          >
+            <PanelLeftCloseIcon className="size-4" />
+          </button>
         </div>
 
-        <div className="pl-2 pr-2 pb-5">
-          <Button
-            type="primary"
-            block
-            icon={<PlusSquareOutlined />}
+        {/* New Chat Button */}
+        <div className="px-3 py-3">
+          <button
             onClick={createNewSession}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-600 active:bg-blue-700 transition-colors"
           >
+            <PlusIcon className="size-4" />
             新增 Chat
-          </Button>
+          </button>
         </div>
 
-        <div className="pl-2 pr-2">
-          <Menu
-            mode="inline"
-            selectedKeys={currentSessionId ? [currentSessionId] : []}
-            className="flex-1"
-          >
-            {sessions.length === 0 ? (
-              <Menu.Item key="empty" disabled>
-                <MessageOutlined />
-                暂无会话
-              </Menu.Item>
-            ) : (
-              sessions.map(session => (
-                <Menu.Item key={session.id} onClick={() => setCurrentSessionId(session.id)}>
+        {/* Session List */}
+        <div className="flex-1 overflow-y-auto px-2 pb-2">
+          {sessions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+              <MessageSquareIcon className="size-8 mb-2" />
+              <span className="text-xs">暂无会话</span>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-0.5">
+              {sessions.map(session => (
+                <div
+                  key={session.id}
+                  onClick={() => {
+                    if (editingSessionId !== session.id) {
+                      setCurrentSessionId(session.id);
+                    }
+                  }}
+                  onMouseEnter={() => setHoveredSessionId(session.id)}
+                  onMouseLeave={() => setHoveredSessionId(null)}
+                  className={`group relative flex items-center gap-2 rounded-lg px-3 py-2.5 cursor-pointer transition-colors ${
+                    currentSessionId === session.id
+                      ? 'bg-blue-50 text-blue-700'
+                      : 'text-gray-700 hover:bg-gray-100'
+                  }`}
+                >
+                  <MessageSquareIcon className="size-4 shrink-0 opacity-50" />
+
                   {editingSessionId === session.id ? (
-                    <div className="flex items-center gap-2 w-full">
+                    <div className="flex flex-1 items-center gap-1 min-w-0">
                       <input
                         type="text"
                         value={editName}
@@ -294,74 +447,145 @@ function ChatContent(): JSX.Element {
                           if (e.key === 'Enter') handleUpdateSessionName(session.id);
                           else if (e.key === 'Escape') setEditingSessionId(null);
                         }}
-                        className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none"
+                        onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                        className="flex-1 min-w-0 rounded-md border border-blue-300 bg-white px-2 py-0.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20"
                       />
-                      <Button
-                        type="text"
-                        icon={<EditOutlined />}
-                        onClick={() => handleUpdateSessionName(session.id)}
-                      />
-                      <Button
-                        type="text"
-                        onClick={() => setEditingSessionId(null)}
+                      <button
+                        onClick={(e: React.MouseEvent) => {
+                          e.stopPropagation();
+                          handleUpdateSessionName(session.id);
+                        }}
+                        className="shrink-0 p-1 rounded text-blue-500 hover:bg-blue-100"
                       >
-                        取消
-                      </Button>
+                        <CheckIcon className="size-3.5" />
+                      </button>
+                      <button
+                        onClick={(e: React.MouseEvent) => {
+                          e.stopPropagation();
+                          setEditingSessionId(null);
+                        }}
+                        className="shrink-0 p-1 rounded text-gray-400 hover:bg-gray-100"
+                      >
+                        <XIcon className="size-3.5" />
+                      </button>
                     </div>
                   ) : (
-                    <div className="flex items-center justify-between w-full">
-                      <div className="flex-1 min-w-0">
-                        <span className="truncate">{session.name}</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          type="text"
-                          icon={<EditOutlined />}
-                          onClick={() => {
+                    <>
+                      <span className="flex-1 truncate text-sm">{session.name}</span>
+                      <div
+                        className={`flex items-center gap-0.5 shrink-0 transition-opacity ${
+                          hoveredSessionId === session.id || currentSessionId === session.id
+                            ? 'opacity-100'
+                            : 'opacity-0'
+                        }`}
+                      >
+                        <button
+                          onClick={(e: React.MouseEvent) => {
+                            e.stopPropagation();
                             setEditingSessionId(session.id);
                             setEditName(session.name);
                           }}
-                        />
-                        <Popconfirm
-                          title="确定删除该会话？"
-                          onConfirm={() => handleDeleteSession(session.id)}
+                          className="p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-200"
                         >
-                          <Button type="text" danger icon={<DeleteOutlined />} />
-                        </Popconfirm>
+                          <PencilIcon className="size-3.5" />
+                        </button>
+                        <button
+                          onClick={(e: React.MouseEvent) => {
+                            e.stopPropagation();
+                            setDeleteConfirm({ open: true, sessionId: session.id });
+                          }}
+                          className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50"
+                        >
+                          <Trash2Icon className="size-3.5" />
+                        </button>
                       </div>
-                    </div>
+                    </>
                   )}
-                </Menu.Item>
-              ))
-            )}
-          </Menu>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      </Sider>
 
-      <Content className="flex flex-col">
-        {currentSessionId ? (
-          <>
-            <Header className="bg-white border-b px-4">
-              <h3 className="font-medium text-gray-800 m-0">
-                {sessions.find(s => s.id === currentSessionId)?.name || 'Chat'}
-              </h3>
-            </Header>
-            <div className="flex-1 overflow-hidden">
-              <AssistantRuntimeProvider runtime={runtime}>
-                <Thread sessionId={currentSessionId} />
-              </AssistantRuntimeProvider>
+        {/* Sidebar Footer - User Info */}
+        <div className="border-t border-gray-100 px-3 py-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
+                <UserIcon className="size-4" />
+              </div>
+              <span className="truncate text-sm text-gray-600">{user?.email}</span>
             </div>
-          </>
-        ) : (
-          <div className="h-full flex items-center justify-center text-gray-500">
-            <div className="text-center">
-              <MessageOutlined size={48} className="mx-auto mb-3 text-gray-300" />
-              <p>请选择或创建一个会话</p>
-            </div>
+            <button
+              onClick={handleLogout}
+              className="shrink-0 p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+              title="退出登录"
+            >
+              <LogOutIcon className="size-4" />
+            </button>
           </div>
-        )}
-      </Content>
-    </Layout>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex flex-1 flex-col min-w-0">
+        {/* Chat Header */}
+        <header className="flex items-center gap-3 border-b border-gray-200 bg-white px-4 py-3">
+          {sidebarCollapsed && (
+            <button
+              onClick={() => setSidebarCollapsed(false)}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+            >
+              <PanelLeftOpenIcon className="size-4" />
+            </button>
+          )}
+          <h3 className="font-medium text-gray-800 text-sm truncate">
+            {currentSessionId
+              ? sessions.find(s => s.id === currentSessionId)?.name || 'Chat'
+              : '聊天助手'}
+          </h3>
+        </header>
+
+        {/* Chat Body */}
+        <div className="flex-1 overflow-hidden">
+          {currentSessionId ? (
+            <AssistantRuntimeProvider runtime={runtime} key={currentSessionId}>
+              <Thread />
+            </AssistantRuntimeProvider>
+          ) : (
+            <div className="h-full flex items-center justify-center text-gray-400">
+              <div className="flex flex-col items-center gap-3">
+                <MessageSquareIcon className="size-12 text-gray-300" />
+                <p className="text-sm">请选择或创建一个会话</p>
+                <button
+                  onClick={createNewSession}
+                  className="mt-2 flex items-center gap-2 rounded-xl bg-blue-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-600 transition-colors"
+                >
+                  <PlusIcon className="size-4" />
+                  开始新对话
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* Delete Confirm Dialog */}
+      <ConfirmDialog
+        open={deleteConfirm.open}
+        title="删除会话"
+        description="确定删除该会话？此操作不可撤销。"
+        confirmText="删除"
+        cancelText="取消"
+        onConfirm={() => {
+          if (deleteConfirm.sessionId) {
+            handleDeleteSession(deleteConfirm.sessionId);
+          }
+          setDeleteConfirm({ open: false, sessionId: null });
+        }}
+        onCancel={() => setDeleteConfirm({ open: false, sessionId: null })}
+      />
+    </div>
   );
 }
 

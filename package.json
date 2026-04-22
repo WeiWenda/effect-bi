@@ -15,7 +15,6 @@
     "@assistant-ui/react-langgraph": "^0.13.10",
     "@assistant-ui/react-markdown": "^0.12.9",
     "@tailwindcss/vite": "^4.2.2",
-    "antd": "^6.3.6",
     "axios": "^1.15.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
