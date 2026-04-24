@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UserIcon, LockIcon, MailIcon, EyeIcon, EyeOffIcon } from 'lucide-react';
-import { authAPI, UserResponse, tokenStorage } from '../services/api';
+import { authAPI, UserResponse, tokenStorage } from '../services/llmApi';
 
 export default function Register(): React.JSX.Element {
   const [username, setUsername] = useState<string>('');

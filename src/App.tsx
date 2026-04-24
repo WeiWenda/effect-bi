@@ -1,10 +1,14 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import Register from './components/Register';
 import Login from './components/Login';
 import Chat from './components/Chat';
+import Lineage from './components/Lineage';
+import Tasks from './components/Tasks';
+import { TableDetailPage } from './components/lineage-explore/TableDetailPage';
+import Navbar from './components/Navbar';
 import { TooltipProvider } from './components/ui/tooltip';
 import { ToastProvider } from './components/ui/toast';
-import { tokenStorage } from './services/api';
+import { tokenStorage } from './services/llmApi';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -30,6 +34,17 @@ function PublicRoute({ children }: PublicRouteProps): React.ReactNode {
   return children;
 }
 
+function MainLayout(): React.JSX.Element {
+  return (
+    <div className="h-screen flex flex-col bg-gray-50">
+      <Navbar />
+      <main className="flex-1 overflow-hidden">
+        <Outlet />
+      </main>
+    </div>
+  );
+}
+
 function App(): React.JSX.Element {
   return (
     <ToastProvider>
@@ -53,13 +68,19 @@ function App(): React.JSX.Element {
               }
             />
             <Route
-              path="/chat"
+              path="/"
               element={
                 <ProtectedRoute>
-                  <Chat />
+                  <MainLayout />
                 </ProtectedRoute>
               }
-            />
+            >
+              <Route path="chat" element={<Chat />} />
+              <Route path="lineage" element={<Lineage />} />
+              <Route path="lineage/table/:tableName" element={<TableDetailPage />} />
+              <Route path="tasks" element={<Tasks />} />
+              <Route index element={<Navigate to="/chat" replace />} />
+            </Route>
             <Route path="*" element={<Navigate to="/login" />} />
           </Routes>
         </BrowserRouter>

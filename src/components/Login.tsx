@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MailIcon, LockIcon, EyeIcon, EyeOffIcon } from 'lucide-react';
-import { authAPI, TokenResponse, tokenStorage } from '../services/api';
+import { authAPI, TokenResponse, tokenStorage } from '../services/llmApi';
 
 export default function Login(): React.JSX.Element {
   const [email, setEmail] = useState<string>('');

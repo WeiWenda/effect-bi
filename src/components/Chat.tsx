@@ -1,11 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   PlusIcon,
-  LogOutIcon,
   Trash2Icon,
   PencilIcon,
-  UserIcon,
   MessageSquareIcon,
   XIcon,
   CheckIcon,
@@ -15,7 +12,7 @@ import {
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import { useLangGraphRuntime, LangGraphMessagesEvent, LangChainMessage } from '@assistant-ui/react-langgraph';
 import { Thread } from './assistant-ui/thread';
-import { authAPI, chatAPI, Session, tokenStorage, threadListAdapter } from '../services/api';
+import { authAPI, chatAPI, Session, tokenStorage, threadListAdapter } from '../services/llmApi';
 import { useToast } from './ui/toast';
 import { ConfirmDialog } from './ui/confirm-dialog';
 
@@ -26,7 +23,6 @@ interface ChatSession {
 }
 
 function ChatContent(): React.JSX.Element {
-  const [user, setUser] = useState<{ email: string } | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [sessionTokens, setSessionTokens] = useState<Record<string, string>>({});
@@ -40,21 +36,7 @@ function ChatContent(): React.JSX.Element {
   });
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
   const [sessionMessages, setSessionMessages] = useState<Record<string, LangChainMessage[]>>({});
-  const navigate = useNavigate();
   const { toast } = useToast();
-
-  const fetchUser = useCallback(async (): Promise<void> => {
-    try {
-      const token = tokenStorage.getUserToken();
-      if (!token) {
-        navigate('/login');
-        return;
-      }
-      setUser({ email: '用户' });
-    } catch {
-      navigate('/login');
-    }
-  }, [navigate]);
 
   const fetchSessions = useCallback(async (): Promise<void> => {
     try {
@@ -154,13 +136,6 @@ function ChatContent(): React.JSX.Element {
       toast('更新会话名称失败', 'error');
       console.error('Failed to update session name:', err);
     }
-  };
-
-  const handleLogout = (): void => {
-    tokenStorage.clearUserToken();
-    tokenStorage.clearSessionToken();
-    localStorage.removeItem('user');
-    navigate('/login');
   };
 
   const summarizeAndRenameSession = useCallback(async (
@@ -334,15 +309,9 @@ function ChatContent(): React.JSX.Element {
   });
 
   useEffect(() => {
-    fetchUser();
-  }, [fetchUser]);
-
-  useEffect(() => {
-    if (user) {
-      fetchSessions();
-      setLoading(false);
-    }
-  }, [user, fetchSessions]);
+    fetchSessions();
+    setLoading(false);
+  }, [fetchSessions]);
 
   // Handle session switching
   useEffect(() => {
@@ -380,7 +349,7 @@ function ChatContent(): React.JSX.Element {
   }
 
   return (
-    <div className="h-screen flex bg-gray-50">
+    <div className="h-full flex bg-gray-50">
       {/* Sidebar */}
       <aside
         className={`flex flex-col border-r border-gray-200 bg-white transition-all duration-300 ${
@@ -507,44 +476,21 @@ function ChatContent(): React.JSX.Element {
           )}
         </div>
 
-        {/* Sidebar Footer - User Info */}
-        <div className="border-t border-gray-100 px-3 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
-                <UserIcon className="size-4" />
-              </div>
-              <span className="truncate text-sm text-gray-600">{user?.email}</span>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="shrink-0 p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-              title="退出登录"
-            >
-              <LogOutIcon className="size-4" />
-            </button>
-          </div>
-        </div>
       </aside>
 
       {/* Main Content */}
       <main className="flex flex-1 flex-col min-w-0">
-        {/* Chat Header */}
-        <header className="flex items-center gap-3 border-b border-gray-200 bg-white px-4 py-3">
-          {sidebarCollapsed && (
+        {/* Sidebar Toggle Button */}
+        {sidebarCollapsed && (
+          <div className="absolute top-4 left-4 z-10">
             <button
               onClick={() => setSidebarCollapsed(false)}
-              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              className="p-2 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors shadow-sm"
             >
               <PanelLeftOpenIcon className="size-4" />
             </button>
-          )}
-          <h3 className="font-medium text-gray-800 text-sm truncate">
-            {currentSessionId
-              ? sessions.find(s => s.id === currentSessionId)?.name || 'Chat'
-              : '聊天助手'}
-          </h3>
-        </header>
+          </div>
+        )}
 
         {/* Chat Body */}
         <div className="flex-1 overflow-hidden">
