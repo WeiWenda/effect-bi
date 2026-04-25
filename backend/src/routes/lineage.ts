@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getSession } from '../config/neo4j.js';
+import { pool } from '../config/postgres.js';
 import neo4j from 'neo4j-driver';
 
 const router: Router = Router();
@@ -315,6 +316,105 @@ router.get('/downstream', async (req: Request, res: Response): Promise<void> => 
   } catch (error) {
     console.error('Error getting downstream lineage:', error);
     res.status(500).json({ error: 'Failed to get downstream lineage' });
+  }
+});
+
+/**
+ * Get lineage for a DAG view by ID
+ * Query: GET /api/lineage/dag/:dagId
+ */
+router.get('/dag/:dagId', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { dagId } = req.params;
+    const dagIdStr = Array.isArray(dagId) ? dagId[0] : dagId;
+
+    if (!dagIdStr || isNaN(parseInt(dagIdStr))) {
+      res.status(400).json({ error: 'Valid DAG ID is required' });
+      return;
+    }
+
+    // Fetch DAG view from PostgreSQL
+    const pgClient = await pool.connect();
+    let nodeIds: string[];
+    try {
+      const pgQuery = `
+        SELECT node_ids
+        FROM dag_views
+        WHERE id = $1
+      `;
+      const pgResult = await pgClient.query(pgQuery, [dagIdStr]);
+
+      if (pgResult.rows.length === 0) {
+        res.status(404).json({ error: 'DAG view not found' });
+        return;
+      }
+
+      nodeIds = pgResult.rows[0].node_ids;
+    } finally {
+      pgClient.release();
+    }
+
+    // Query Neo4j for relationships between the nodes
+    const session = getSession();
+    const nodeIdsString = nodeIds.map((id: string) => `'${id}'`).join(', ');
+    const query = `
+      MATCH (a:HiveTable)-[r]->(b:HiveTable)
+      WHERE elementId(a) IN [${nodeIdsString}] AND elementId(b) IN [${nodeIdsString}]
+      RETURN a, r, b
+    `;
+
+    const result = await session.run(query);
+
+    const nodesMap = new Map<string, Node>();
+    const relationships: Relationship[] = [];
+
+    result.records.forEach((record: any) => {
+      const startNode = record.get('a');
+      const relationship = record.get('r');
+      const endNode = record.get('b');
+
+      // Add start node
+      const startNodeId = startNode.elementId;
+      if (!nodesMap.has(startNodeId)) {
+        nodesMap.set(startNodeId, {
+          id: startNodeId,
+          labels: startNode.labels,
+          properties: startNode.properties
+        });
+      }
+
+      // Add end node
+      const endNodeId = endNode.elementId;
+      if (!nodesMap.has(endNodeId)) {
+        nodesMap.set(endNodeId, {
+          id: endNodeId,
+          labels: endNode.labels,
+          properties: endNode.properties
+        });
+      }
+
+      // Add relationship
+      relationships.push({
+        id: relationship.elementId,
+        type: relationship.type,
+        properties: relationship.properties,
+        startNodeId: relationship.startNodeElementId,
+        endNodeId: relationship.endNodeElementId
+      });
+    });
+
+    await session.close();
+
+    // Return as a single path containing all nodes and relationships
+    res.json({
+      paths: [{
+        nodes: Array.from(nodesMap.values()),
+        relationships
+      }]
+    });
+  } catch (error) {
+    console.error('Error getting DAG lineage:', error);
+    res.status(500).json({ error: 'Failed to get DAG lineage' });
   }
 });
 

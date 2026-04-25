@@ -75,4 +75,11 @@ export const lineageAPI = {
     );
     return response.data;
   },
+
+  getDagLineage: async (dagId: number): Promise<LineageResponse> => {
+    const response: AxiosResponse<LineageResponse> = await axios.get(
+      `${LINEAGE_API_BASE_URL}/dag/${dagId}`
+    );
+    return response.data;
+  },
 };

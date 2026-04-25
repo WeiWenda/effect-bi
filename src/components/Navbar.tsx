@@ -17,6 +17,9 @@ function Navbar(): React.JSX.Element {
     if (path === '/lineage') {
       return location.pathname.startsWith('/lineage');
     }
+    if (path === '/dags') {
+      return location.pathname.startsWith('/dags');
+    }
     return location.pathname === path;
   };
 
@@ -46,9 +49,9 @@ function Navbar(): React.JSX.Element {
           血缘
         </button>
         <button
-          onClick={() => navigate('/tasks')}
+          onClick={() => navigate('/dags')}
           className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-            isActive('/tasks')
+            isActive('/dags')
               ? 'bg-white text-gray-800 shadow-sm'
               : 'text-gray-500 hover:text-gray-700'
           }`}

@@ -3,7 +3,7 @@ import Register from './components/Register';
 import Login from './components/Login';
 import Chat from './components/Chat';
 import Lineage from './components/Lineage';
-import Tasks from './components/Tasks';
+import Dags from './components/Dags';
 import { TableDetailPage } from './components/lineage-explore/TableDetailPage';
 import Navbar from './components/Navbar';
 import { TooltipProvider } from './components/ui/tooltip';
@@ -37,7 +37,7 @@ function PublicRoute({ children }: PublicRouteProps): React.ReactNode {
 function MainLayout(): React.JSX.Element {
   return (
     <div className="h-screen flex flex-col bg-gray-50">
-      <Navbar />
+        <Navbar />
       <main className="flex-1 overflow-hidden">
         <Outlet />
       </main>
@@ -78,7 +78,8 @@ function App(): React.JSX.Element {
               <Route path="chat" element={<Chat />} />
               <Route path="lineage" element={<Lineage />} />
               <Route path="lineage/table/:tableName" element={<TableDetailPage />} />
-              <Route path="tasks" element={<Tasks />} />
+              <Route path="dags" element={<Dags />} />
+              <Route path="dags/:id" element={<Dags />} />
               <Route index element={<Navigate to="/chat" replace />} />
             </Route>
             <Route path="*" element={<Navigate to="/login" />} />

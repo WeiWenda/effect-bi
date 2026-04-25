@@ -5,12 +5,12 @@ type ToastType = 'success' | 'error' | 'info';
 
 interface Toast {
   id: number;
-  message: string;
+  message: ReactNode;
   type: ToastType;
 }
 
 interface ToastContextType {
-  toast: (message: string, type?: ToastType) => void;
+  toast: (message: ReactNode, type?: ToastType) => void;
 }
 
 const ToastContext = createContext<ToastContextType | null>(null);
@@ -30,10 +30,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  const toast = useCallback((message: string, type: ToastType = 'success') => {
+  const toast = useCallback((message: ReactNode, type: ToastType = 'success') => {
     const id = ++toastId;
     setToasts(prev => [...prev, { id, message, type }]);
-    setTimeout(() => removeToast(id), 3000);
+    setTimeout(() => removeToast(id), 5000);
   }, [removeToast]);
 
   const iconMap: Record<ToastType, ReactNode> = {

@@ -12,10 +12,12 @@ import {
   ReactFlowProvider,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ChevronLeft, ChevronRight, Plus, Minus, ExternalLink, Eye, EyeOff, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Minus, ExternalLink, Eye, EyeOff, Check, MoreVerticalIcon } from 'lucide-react';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import { lineageAPI, LineageNode, LineageRelationship } from '../../services/lineageApi';
+import { dagAPI } from '../../services/dagApi';
 import { LineageConfigPanel, LineageConfig } from './LineageConfigPanel';
+import { useToast } from '../ui/toast';
 
 interface LineageGraphTabProps {
   entityId: string;
@@ -30,16 +32,20 @@ interface NodeData {
   isCenter: boolean;
   direction: 'upstream' | 'downstream' | 'center';
   level: number;
-  expanded: {
+  loaded: {
     upstream: boolean;
     downstream: boolean;
   };
   hidden?: boolean;
   selected?: boolean;
-  collapsed?: boolean;
+  visible?: boolean;
+  collapsed?: {
+    upstream: boolean;
+    downstream: boolean;
+  };
 }
 
-const CustomNode = ({ data, onToggleHide, onToggleSelect, onToggleCollapse, onExpandDownstream, onExpandUpstream, showOnlySelected }: { data: NodeData; onToggleHide?: (nodeId: string) => void; onToggleSelect?: (nodeId: string) => void; onToggleCollapse?: (nodeId: string, direction: 'upstream' | 'downstream') => void; onExpandDownstream?: (nodeId: string) => void; onExpandUpstream?: (nodeId: string) => void; showOnlySelected?: boolean }) => {
+const CustomNode = ({ data, onToggleHide, onToggleSelect, onToggleCollapse, onLoadDownstream, onLoadUpstream }: { data: NodeData; onToggleHide?: (nodeId: string) => void; onToggleSelect?: (nodeId: string) => void; onToggleCollapse?: (nodeId: string, direction: 'upstream' | 'downstream') => void; onLoadDownstream?: (nodeId: string) => void; onLoadUpstream?: (nodeId: string) => void }) => {
   const handleOpenNewPage = (e: React.MouseEvent) => {
     e.stopPropagation();
     // TODO: Open new page with current node as center
@@ -58,25 +64,25 @@ const CustomNode = ({ data, onToggleHide, onToggleSelect, onToggleCollapse, onEx
 
   const handleLeftButtonClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    // Check if upstream nodes are expanded
-    if (data.expanded?.upstream) {
-      // If expanded, collapse them
+    // Check if upstream nodes are loaded
+    if (data.loaded?.upstream && !data.collapsed?.upstream) {
+      // If loaded and not collapsed, collapse them
       onToggleCollapse?.(data.entityId, 'upstream');
     } else {
-      // If not expanded, fetch from backend
-      onExpandUpstream?.(data.entityId);
+      // If not loaded or collapsed, load/expand them
+      onLoadUpstream?.(data.entityId);
     }
   };
 
   const handleRightButtonClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    // Check if downstream nodes are expanded
-    if (data.expanded?.downstream) {
-      // If expanded, collapse them
+    // Check if downstream nodes are loaded
+    if (data.loaded?.downstream && !data.collapsed?.downstream) {
+      // If loaded and not collapsed, collapse them
       onToggleCollapse?.(data.entityId, 'downstream');
     } else {
-      // If not expanded, fetch from backend
-      onExpandDownstream?.(data.entityId);
+      // If not loaded or collapsed, load/expand them
+      onLoadDownstream?.(data.entityId);
     }
   };
 
@@ -98,7 +104,7 @@ const CustomNode = ({ data, onToggleHide, onToggleSelect, onToggleCollapse, onEx
           <button
             onClick={handleLeftButtonClick}
             className="p-1 hover:bg-gray-100 rounded transition-colors"
-            title={data.expanded?.upstream ? "收起上游" : "查看上游"}
+            title={data.loaded?.upstream && !data.collapsed?.upstream ? "收起上游" : "加载上游"}
           >
             <ChevronLeft className="size-3 text-gray-500" />
           </button>
@@ -107,7 +113,7 @@ const CustomNode = ({ data, onToggleHide, onToggleSelect, onToggleCollapse, onEx
           <button
             onClick={handleRightButtonClick}
             className="p-1 hover:bg-gray-100 rounded transition-colors"
-            title={data.expanded?.downstream ? "收起下游" : "查看下游"}
+            title={data.loaded?.downstream && !data.collapsed?.downstream ? "收起下游" : "加载下游"}
           >
             <ChevronRight className="size-3 text-gray-500" />
           </button>
@@ -119,7 +125,7 @@ const CustomNode = ({ data, onToggleHide, onToggleSelect, onToggleCollapse, onEx
         >
           <ExternalLink className="size-3 text-gray-500" />
         </button>
-        {!data.isCenter && !showOnlySelected && (
+        {!data.isCenter && (
           <>
             <button
               onClick={(e) => {
@@ -158,8 +164,8 @@ export function LineageGraphTab({ entityId, tableName }: LineageGraphTabProps): 
   );
 }
 
-const createNodeTypes = (onToggleHide?: (nodeId: string) => void, onToggleSelect?: (nodeId: string) => void, onToggleCollapse?: (nodeId: string, direction: 'upstream' | 'downstream') => void, onExpandDownstream?: (nodeId: string) => void, onExpandUpstream?: (nodeId: string) => void, showOnlySelected?: boolean): NodeTypes => ({
-  custom: (props) => <CustomNode {...props} onToggleHide={onToggleHide} onToggleSelect={onToggleSelect} onToggleCollapse={onToggleCollapse} onExpandDownstream={onExpandDownstream} onExpandUpstream={onExpandUpstream} showOnlySelected={showOnlySelected} />,
+const createNodeTypes = (onToggleHide?: (nodeId: string) => void, onToggleSelect?: (nodeId: string) => void, onToggleCollapse?: (nodeId: string, direction: 'upstream' | 'downstream') => void, onLoadDownstream?: (nodeId: string) => void, onLoadUpstream?: (nodeId: string) => void): NodeTypes => ({
+  custom: (props) => <CustomNode {...props} onToggleHide={onToggleHide} onToggleSelect={onToggleSelect} onToggleCollapse={onToggleCollapse} onLoadDownstream={onLoadDownstream} onLoadUpstream={onLoadUpstream} />,
 });
 
 const elk = new ELK();
@@ -171,12 +177,8 @@ const elkOptions = {
   'elk.spacing.nodeNode': '80',
 };
 
-const getLayoutedElements = (nodes: Node[], edges: Edge[], showOnlySelected: boolean, options = {}): Promise<{ nodes: Node[]; edges: Edge[] }> => {
-  let visibleNodes = nodes.filter(n => !n.data.hidden);
-
-  if (showOnlySelected) {
-    visibleNodes = visibleNodes.filter(n => n.data.selected || n.data.isCenter);
-  }
+const getLayoutedElements = (nodes: Node[], edges: Edge[], options = {}): Promise<{ nodes: Node[]; edges: Edge[] }> => {
+  let visibleNodes = nodes.filter(n => !n.data.hidden && n.data.visible !== false);
 
   const visibleNodeIds = new Set(visibleNodes.map(n => n.id));
   const visibleEdges = edges.filter(e => visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target));
@@ -220,20 +222,24 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], showOnlySelected: boo
 };
 
 const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
+  const { toast } = useToast();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [config, setConfig] = useState<LineageConfig>({
     upstreamDepth: 1,
     downstreamDepth: 1,
     limit: 10,
   });
-  const [showOnlySelected, setShowOnlySelected] = useState(false);
+  const [actionDialogOpen, setActionDialogOpen] = useState(false);
+  const [dagName, setDagName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [centerOnNodeId, setCenterOnNodeId] = useState<string | null>(null);
   const { fitView, setCenter } = useReactFlow();
 
   const debounceRef = useRef<NodeJS.Timeout>();
   const prevNodesRef = useRef<Node[]>([]);
-  const prevShowOnlySelectedRef = useRef<boolean>(showOnlySelected);
 
   const handleToggleHide = useCallback((nodeId: string) => {
     setNodes(prevNodes => prevNodes.map(node => {
@@ -267,65 +273,169 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
 
   const handleToggleCollapse = useCallback((nodeId: string, direction: 'upstream' | 'downstream') => {
     setNodes(prevNodes => {
-      const queue = [nodeId];
-      const nodeIdsToUpdate = new Set<string>();
+      const nodeMap = new Map(prevNodes.map(n => [n.id, n]));
+      const clickedNode = nodeMap.get(nodeId);
+      if (!clickedNode) return prevNodes;
 
-      // Find all nodes in the specified direction
-      while (queue.length > 0) {
-        const currentId = queue.shift()!;
-        nodeIdsToUpdate.add(currentId);
+      const currentLoaded = clickedNode.data.loaded || { upstream: false, downstream: false };
+      const isCollapsing = currentLoaded[direction]; // true -> false (collapsing), false -> true (expanding)
+
+      if (isCollapsing) {
+        // Collapsing: set collapsed[direction]=true for clicked node, cascade set visible=false for downstream nodes
+        const queue = [nodeId];
+        const nodeIdsToHide = new Set<string>();
+
+        while (queue.length > 0) {
+          const currentId = queue.shift()!;
+          nodeIdsToHide.add(currentId);
+
+          edges.forEach(edge => {
+            if (direction === 'downstream' && edge.source === currentId && !nodeIdsToHide.has(edge.target)) {
+              nodeIdsToHide.add(edge.target);
+              queue.push(edge.target);
+            } else if (direction === 'upstream' && edge.target === currentId && !nodeIdsToHide.has(edge.source)) {
+              nodeIdsToHide.add(edge.source);
+              queue.push(edge.source);
+            }
+          });
+        }
+
+        return prevNodes.map(node => {
+          if (node.id === nodeId) {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                collapsed: {
+                  ...(node.data.collapsed || { upstream: false, downstream: false }),
+                  [direction]: true,
+                },
+                loaded: {
+                  ...(node.data.loaded || { upstream: false, downstream: false }),
+                  [direction]: false,
+                },
+              },
+            };
+          } else if (nodeIdsToHide.has(node.id)) {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                visible: false,
+              },
+            };
+          }
+          return node;
+        });
+      } else {
+        // Expanding: set collapsed[direction]=false for clicked node, set visible=true for direct neighbors
+        const directNeighborIds = new Set<string>();
 
         edges.forEach(edge => {
-          if (direction === 'downstream' && edge.source === currentId && !nodeIdsToUpdate.has(edge.target)) {
-            nodeIdsToUpdate.add(edge.target);
-            queue.push(edge.target);
-          } else if (direction === 'upstream' && edge.target === currentId && !nodeIdsToUpdate.has(edge.source)) {
-            nodeIdsToUpdate.add(edge.source);
-            queue.push(edge.source);
+          if (direction === 'downstream' && edge.source === nodeId) {
+            directNeighborIds.add(edge.target);
+          } else if (direction === 'upstream' && edge.target === nodeId) {
+            directNeighborIds.add(edge.source);
           }
         });
-      }
 
-      // Toggle expanded state for all nodes in the direction
-      return prevNodes.map(node => {
-        if (nodeIdsToUpdate.has(node.id)) {
-          const currentExpanded = node.data.expanded || { upstream: false, downstream: false };
-          return {
-            ...node,
-            data: {
-              ...node.data,
-              expanded: {
-                ...currentExpanded,
-                [direction]: !currentExpanded[direction],
+        return prevNodes.map(node => {
+          if (node.id === nodeId) {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                collapsed: {
+                  ...(node.data.collapsed || { upstream: false, downstream: false }),
+                  [direction]: false,
+                },
+                loaded: {
+                  ...(node.data.loaded || { upstream: false, downstream: false }),
+                  [direction]: true,
+                },
               },
-            },
-          };
-        }
-        return node;
-      });
+            };
+          } else if (directNeighborIds.has(node.id)) {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                visible: true,
+              },
+            };
+          }
+          return node;
+        });
+      }
     });
   }, [edges]);
 
-  const handleToggleShowOnlySelected = useCallback(() => {
-    setShowOnlySelected(prev => !prev);
-  }, []);
 
-  // Re-layout when hidden, collapsed, or showOnlySelected changes
+  const handleSaveDag = async () => {
+    if (!dagName.trim()) {
+      toast('请输入DAG名称', 'error');
+      return;
+    }
+
+    const selectedNodeIds = nodes.filter(n => n.data.selected).map(n => n.id);
+    if (selectedNodeIds.length === 0) {
+      toast('请先选择至少一个节点', 'error');
+      return;
+    }
+
+    // Include center node to ensure DAG path is complete
+    const allNodeIds = Array.from(new Set([entityId, ...selectedNodeIds]));
+
+    setSaving(true);
+    try {
+      const response = await dagAPI.createDag({
+        name: dagName,
+        nodeIds: allNodeIds,
+        description: `从血缘视图创建，包含 ${allNodeIds.length} 个节点`,
+      });
+
+      toast(
+        <span>
+          保存成功，{' '}
+          <a
+            href={`/dags/${response.dagView.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-blue-600 font-medium"
+          >
+            点击查看
+          </a>
+        </span>,
+        'success'
+      );
+
+      setActionDialogOpen(false);
+      setDagName('');
+    } catch (error) {
+      console.error('Error saving DAG:', error);
+      toast('保存失败，请稍后重试', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Re-layout when nodes/edges change
   useEffect(() => {
-    if (nodes.length === 0) return;
-
-    // Check if visibility has changed
+    // Check if this is initial load or visibility has changed
+    const isInitialLoad = prevNodesRef.current.length === 0 && nodes.length > 0;
     const visibilityChanged = prevNodesRef.current.length !== nodes.length ||
       prevNodesRef.current.some((prevNode, index) => {
         const currentNode = nodes[index];
         return (
           prevNode.data.hidden !== currentNode.data.hidden ||
           prevNode.data.selected !== currentNode.data.selected ||
-          JSON.stringify(prevNode.data.expanded) !== JSON.stringify(currentNode.data.expanded)
+          prevNode.data.visible !== currentNode.data.visible ||
+          JSON.stringify(prevNode.data.collapsed) !== JSON.stringify(currentNode.data.collapsed) ||
+          JSON.stringify(prevNode.data.loaded) !== JSON.stringify(currentNode.data.loaded)
         );
       });
 
-    if (!visibilityChanged && showOnlySelected === prevShowOnlySelectedRef.current) {
+    if (!isInitialLoad && !visibilityChanged) {
       prevNodesRef.current = nodes;
       return;
     }
@@ -337,22 +447,39 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
 
     // Debounce the layout calculation
     debounceRef.current = setTimeout(() => {
-      getLayoutedElements(nodes, edges, showOnlySelected, elkOptions).then(
+      getLayoutedElements(nodes, edges, elkOptions).then(
         ({ nodes: layoutedNodes, edges: layoutedEdges }) => {
           setNodes(layoutedNodes);
           setEdges(layoutedEdges);
+
+          // Fit view only on initial load
+          if (isInitialLoad) {
+            setTimeout(() => {
+              fitView({ padding: 0.2, duration: 500 });
+            }, 100);
+          }
+
+          // Center on the specified node if requested
+          if (centerOnNodeId) {
+            const clickedNode = layoutedNodes.find((n: Node) => n.id === centerOnNodeId);
+            if (clickedNode) {
+              setCenter(clickedNode.position.x, clickedNode.position.y, { zoom: 1, duration: 500 });
+            }
+            setCenterOnNodeId(null);
+          }
         },
       );
     }, 300);
 
     prevNodesRef.current = nodes;
-    prevShowOnlySelectedRef.current = showOnlySelected;
-  }, [showOnlySelected, nodes, edges]);
+  }, [nodes, edges, centerOnNodeId, setCenter]);
 
-  const handleExpandDownstream = useCallback(async (nodeId: string) => {
-    setLoading(true);
+  const handleLoad = useCallback(async (nodeId: string, direction: 'upstream' | 'downstream') => {
+    setLoadingMore(true);
     try {
-      const downstreamRes = await lineageAPI.getDownstreamLineage(nodeId, 1, config.limit);
+      const lineageRes = direction === 'downstream'
+        ? await lineageAPI.getDownstreamLineage(nodeId, 1, config.limit)
+        : await lineageAPI.getUpstreamLineage(nodeId, 1, config.limit);
 
       const existingNodeIds = new Set(nodes.map(n => n.id));
       const existingEdgeIds = new Set(edges.map(e => e.id));
@@ -360,32 +487,39 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
       const newNodes: Node[] = [];
       const newEdges: Edge[] = [];
 
-      downstreamRes.paths.forEach((path) => {
+      lineageRes.paths.forEach((path) => {
         const pathNodes = path.nodes;
         if (pathNodes.length > 0) {
-          const downstreamNode = pathNodes[pathNodes.length - 1];
-          const nodeId = downstreamNode.id;
-          const nodeName = downstreamNode.properties.table_name || downstreamNode.properties.name || 'Unknown';
-          const layer = downstreamNode.properties.layer || downstreamNode.properties.tier;
-          const description = downstreamNode.properties.description || downstreamNode.properties.comment || '';
+          const endNode = pathNodes[pathNodes.length - 1];
+          const newNodeId = endNode.id;
+          const nodeName = endNode.properties.table_name || endNode.properties.name || 'Unknown';
+          const layer = endNode.properties.layer || endNode.properties.tier;
+          const description = endNode.properties.description || endNode.properties.comment || '';
 
-          if (!existingNodeIds.has(nodeId)) {
+          if (!existingNodeIds.has(newNodeId)) {
+            // Position new nodes near their parent to avoid flash at (0,0)
+            const parentNode = nodes.find(n => n.id === nodeId);
+            const offsetX = direction === 'downstream' ? 300 : -300;
+            const existingCount = newNodes.length;
             const node: Node = {
-              id: nodeId,
+              id: newNodeId,
               type: 'custom',
-              position: { x: 0, y: 0 },
+              position: { 
+                x: (parentNode?.position?.x ?? 0) + offsetX, 
+                y: (parentNode?.position?.y ?? 0) + existingCount * 80 
+              },
               data: {
                 label: nodeName,
                 layer,
                 description,
-                entityId: nodeId,
+                entityId: newNodeId,
                 isCenter: false,
-                direction: 'downstream',
+                direction,
                 level: 2,
-                expanded: { upstream: false, downstream: false },
+                loaded: { upstream: false, downstream: false },
                 hidden: false,
                 selected: false,
-                collapsed: false,
+                collapsed: { upstream: false, downstream: false },
               },
             };
             newNodes.push(node);
@@ -410,144 +544,63 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
         const updatedNodes = [...nodes, ...newNodes];
         const updatedEdges = [...edges, ...newEdges];
 
-        // Mark the clicked node as having expanded downstream
+        // Find direct neighbor IDs
+        const directNeighborIds = new Set<string>();
+        updatedEdges.forEach(edge => {
+          if (direction === 'downstream' && edge.source === nodeId) {
+            directNeighborIds.add(edge.target);
+          } else if (direction === 'upstream' && edge.target === nodeId) {
+            directNeighborIds.add(edge.source);
+          }
+        });
+
+        // Mark the clicked node as having loaded in the specified direction
+        // and set visible=true for direct neighbors
         const updatedNodesWithLoaded = updatedNodes.map(node => {
           if (node.id === nodeId) {
-            const currentExpanded = node.data.expanded as { upstream: boolean; downstream: boolean } | undefined;
+            const currentLoaded = node.data.loaded as { upstream: boolean; downstream: boolean } | undefined;
             return {
               ...node,
               data: {
                 ...node.data,
-                expanded: {
-                  ...(currentExpanded || { upstream: false, downstream: false }),
-                  downstream: true,
+                collapsed: {
+                  ...(node.data.collapsed || { upstream: false, downstream: false }),
+                  [direction]: false,
                 },
+                loaded: {
+                  ...(currentLoaded || { upstream: false, downstream: false }),
+                  [direction]: true,
+                },
+              },
+            };
+          } else if (directNeighborIds.has(node.id)) {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                visible: true,
               },
             };
           }
           return node;
         });
 
-        getLayoutedElements(updatedNodesWithLoaded, updatedEdges, showOnlySelected, elkOptions).then(
-          ({ nodes: layoutedNodes, edges: layoutedEdges }) => {
-            setNodes(layoutedNodes);
-            setEdges(layoutedEdges);
-
-            // Find the clicked node in the layouted nodes and center on it
-            const clickedNode = layoutedNodes.find((n: Node) => n.id === nodeId);
-            if (clickedNode) {
-              setCenter(clickedNode.position.x, clickedNode.position.y, { zoom: 1, duration: 500 });
-            }
-          },
-        );
+        setNodes(updatedNodesWithLoaded);
+        setEdges(updatedEdges);
+        setCenterOnNodeId(nodeId);
       }
     } catch (error) {
-      console.error('Error expanding downstream:', error);
+      console.error(`Error loading ${direction}:`, error);
     } finally {
-      setLoading(false);
+      setLoadingMore(false);
     }
-  }, [nodes, edges, config.limit, setCenter, showOnlySelected]);
+  }, [nodes, edges, config.limit]);
 
-  const handleExpandUpstream = useCallback(async (nodeId: string) => {
-    setLoading(true);
-    try {
-      const upstreamRes = await lineageAPI.getUpstreamLineage(nodeId, 1, config.limit);
-
-      const existingNodeIds = new Set(nodes.map(n => n.id));
-      const existingEdgeIds = new Set(edges.map(e => e.id));
-
-      const newNodes: Node[] = [];
-      const newEdges: Edge[] = [];
-
-      upstreamRes.paths.forEach((path) => {
-        const pathNodes = path.nodes;
-        if (pathNodes.length > 0) {
-          const upstreamNode = pathNodes[pathNodes.length - 1];
-          const nodeId = upstreamNode.id;
-          const nodeName = upstreamNode.properties.table_name || upstreamNode.properties.name || 'Unknown';
-          const layer = upstreamNode.properties.layer || upstreamNode.properties.tier;
-          const description = upstreamNode.properties.description || upstreamNode.properties.comment || '';
-
-          if (!existingNodeIds.has(nodeId)) {
-            const node: Node = {
-              id: nodeId,
-              type: 'custom',
-              position: { x: 0, y: 0 },
-              data: {
-                label: nodeName,
-                layer,
-                description,
-                entityId: nodeId,
-                isCenter: false,
-                direction: 'upstream',
-                level: 2,
-                expanded: { upstream: false, downstream: false },
-                hidden: false,
-                selected: false,
-                collapsed: false,
-              },
-            };
-            newNodes.push(node);
-          }
-
-          path.relationships.forEach((rel) => {
-            const edgeId = `${rel.startNodeId}-${rel.endNodeId}`;
-            if (!existingEdgeIds.has(edgeId)) {
-              newEdges.push({
-                id: edgeId,
-                source: rel.startNodeId,
-                target: rel.endNodeId,
-                type: 'smoothstep',
-                animated: true,
-              });
-            }
-          });
-        }
-      });
-
-      if (newNodes.length > 0 || newEdges.length > 0) {
-        const updatedNodes = [...nodes, ...newNodes];
-        const updatedEdges = [...edges, ...newEdges];
-
-        // Mark the clicked node as having expanded upstream
-        const updatedNodesWithLoaded = updatedNodes.map(node => {
-          if (node.id === nodeId) {
-            const currentExpanded = node.data.expanded as { upstream: boolean; downstream: boolean } | undefined;
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                expanded: {
-                  ...(currentExpanded || { upstream: false, downstream: false }),
-                  upstream: true,
-                },
-              },
-            };
-          }
-          return node;
-        });
-
-        getLayoutedElements(updatedNodesWithLoaded, updatedEdges, showOnlySelected, elkOptions).then(
-          ({ nodes: layoutedNodes, edges: layoutedEdges }) => {
-            setNodes(layoutedNodes);
-            setEdges(layoutedEdges);
-
-            const clickedNode = layoutedNodes.find((n: Node) => n.id === nodeId);
-            if (clickedNode) {
-              setCenter(clickedNode.position.x, clickedNode.position.y, { zoom: 1, duration: 500 });
-            }
-          },
-        );
-      }
-    } catch (error) {
-      console.error('Error expanding upstream:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [nodes, edges, config.limit, setCenter, showOnlySelected]);
+  const handleLoadDownstream = useCallback((nodeId: string) => handleLoad(nodeId, 'downstream'), [handleLoad]);
+  const handleLoadUpstream = useCallback((nodeId: string) => handleLoad(nodeId, 'upstream'), [handleLoad]);
 
   const loadInitialLineage = useCallback(async () => {
-    setLoading(true);
+    setInitialLoading(true);
     try {
       const [upstreamRes, downstreamRes] = await Promise.all([
         lineageAPI.getUpstreamLineage(entityId, config.upstreamDepth, config.limit),
@@ -569,10 +622,10 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
           isCenter: true,
           direction: 'center',
           level: 0,
-          expanded: { upstream: true, downstream: true },
+          loaded: { upstream: true, downstream: true },
           hidden: false,
           selected: false,
-          collapsed: false,
+          collapsed: { upstream: false, downstream: false },
         },
       };
       nodeMap.set(entityId, centerNode);
@@ -601,10 +654,10 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
                 isCenter: false,
                 direction: 'upstream',
                 level: 1,
-                expanded: { upstream: false, downstream: false },
+                loaded: { upstream: false, downstream: false },
                 hidden: false,
                 selected: false,
-                collapsed: false,
+                collapsed: { upstream: false, downstream: false },
               },
             };
             nodeMap.set(nodeId, node);
@@ -650,10 +703,10 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
                 isCenter: false,
                 direction: 'downstream',
                 level: 1,
-                expanded: { upstream: false, downstream: false },
+                loaded: { upstream: false, downstream: false },
                 hidden: false,
                 selected: false,
-                collapsed: false,
+                collapsed: { upstream: false, downstream: false },
               },
             };
             nodeMap.set(nodeId, node);
@@ -676,17 +729,13 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
         }
       });
 
-      // Apply ELK layout
-      getLayoutedElements(newNodes, newEdges, showOnlySelected, elkOptions).then(
-        ({ nodes: layoutedNodes, edges: layoutedEdges }) => {
-          setNodes(layoutedNodes);
-          setEdges(layoutedEdges);
-        },
-      );
+      // Set nodes and edges, let useEffect handle layout
+      setNodes(newNodes);
+      setEdges(newEdges);
     } catch (error) {
       console.error('Error loading lineage:', error);
     } finally {
-      setLoading(false);
+      setInitialLoading(false);
     }
   }, [entityId, tableName, config]);
 
@@ -694,9 +743,9 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
     loadInitialLineage();
   }, [loadInitialLineage]);
 
-  const nodeTypes = createNodeTypes(handleToggleHide, handleToggleSelect, handleToggleCollapse, handleExpandDownstream, handleExpandUpstream, showOnlySelected);
+  const nodeTypes = createNodeTypes(handleToggleHide, handleToggleSelect, handleToggleCollapse, handleLoadDownstream, handleLoadUpstream);
 
-  if (loading) {
+  if (initialLoading) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="size-8 animate-spin rounded-full border-2 border-gray-300 border-t-blue-500" />
@@ -706,14 +755,65 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
 
   return (
     <div className="h-full w-full relative">
+      {loadingMore && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full shadow-md flex items-center gap-2">
+          <div className="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-500" />
+          <span className="text-sm text-gray-600">加载中...</span>
+        </div>
+      )}
       <div className="absolute top-4 right-4 z-10 flex gap-2">
-        <button
-          onClick={handleToggleShowOnlySelected}
-          className="px-3 py-1.5 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 transition-colors text-sm"
-          disabled={nodes.filter(n => n.data.selected).length === 0}
-        >
-          {showOnlySelected ? "显示全部" : "只看选中"}
-        </button>
+        <div className="relative">
+          <button
+            onClick={() => setActionDialogOpen(!actionDialogOpen)}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            title="DAG 操作"
+          >
+            <MoreVerticalIcon className="size-5 text-gray-600" />
+          </button>
+
+          {actionDialogOpen && (
+            <div className="absolute right-0 top-12 z-50 w-80 bg-white rounded-lg shadow-lg border border-gray-200 p-4">
+              <h3 className="text-sm font-semibold text-gray-800 mb-4">DAG 操作</h3>
+
+              <div className="space-y-4">
+                <div className="border-t border-gray-200 pt-4">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    DAG 名称
+                  </label>
+                  <input
+                    type="text"
+                    value={dagName}
+                    onChange={(e) => setDagName(e.target.value)}
+                    placeholder="输入DAG视图名称"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    已选择 {nodes.filter(n => n.data.selected).length} 个节点
+                  </p>
+                </div>
+
+                <div className="pt-2 flex gap-2">
+                  <button
+                    onClick={() => {
+                      setActionDialogOpen(false);
+                      setDagName('');
+                    }}
+                    className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-50 transition-colors"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={handleSaveDag}
+                    disabled={saving || nodes.filter(n => n.data.selected).length === 0}
+                    className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-md text-sm font-medium hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {saving ? '保存中...' : '保存'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
         <LineageConfigPanel
           config={config}
           onConfigChange={setConfig}

@@ -3,6 +3,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { closeDriver } from './config/neo4j.js';
 import lineageRoutes from './routes/lineage.js';
+import dagRoutes from './routes/dag.js';
+import fileserverRoutes from './routes/fileserver.js';
+import taskRoutes from './routes/task.js';
 
 dotenv.config();
 
@@ -15,6 +18,9 @@ app.use(express.json());
 
 // Routes
 app.use('/api/lineage', lineageRoutes);
+app.use('/api/dag', dagRoutes);
+app.use('/api/file', fileserverRoutes);
+app.use('/api/task', taskRoutes);
 
 // Health check
 app.get('/health', (req: Request, res: Response) => {

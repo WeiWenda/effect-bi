@@ -1,0 +1,38 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+import { pool } from '../src/config/postgres.ts';
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+async function runMigration() {
+  const migrationsDir = path.join(__dirname, '../migrations');
+  const migrationFiles = [
+    'create_dag_views.sql',
+    'create_task_instances.sql',
+  ];
+
+  const client = await pool.connect();
+  try {
+    for (const migrationFile of migrationFiles) {
+      const migrationPath = path.join(migrationsDir, migrationFile);
+      const sql = fs.readFileSync(migrationPath, 'utf8');
+      console.log('Running migration:', migrationPath);
+
+      await client.query(sql);
+      console.log('Migration completed successfully:', migrationFile);
+    }
+  } catch (error) {
+    console.error('Error running migration:', error);
+    process.exit(1);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+}
+
+runMigration();
