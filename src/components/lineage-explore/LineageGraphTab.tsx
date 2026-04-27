@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import {
   ReactFlow,
   Node,
@@ -17,6 +17,7 @@ import ELK from 'elkjs/lib/elk.bundled.js';
 import { lineageAPI, LineageNode, LineageRelationship } from '../../services/lineageApi';
 import { dagAPI } from '../../services/dagApi';
 import { LineageConfigPanel, LineageConfig } from './LineageConfigPanel';
+import { HiddenNodesPanel } from './HiddenNodesPanel';
 import { useToast } from '../ui/toast';
 
 interface LineageGraphTabProps {
@@ -204,16 +205,16 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], options = {}): Promis
     .layout(graph)
     .then((layoutedGraph) => ({
       nodes: (layoutedGraph.children || []).map((node) => ({
-        ...node,
+            ...node,
         position: { x: node.x || 0, y: node.y || 0 },
       })),
-      edges: (layoutedGraph.edges || []).map((edge) => ({
-        id: edge.id,
-        source: edge.sources[0],
-        target: edge.targets[0],
-        type: 'smoothstep',
-        animated: true,
-      })),
+        edges: (layoutedGraph.edges || []).map((edge) => ({
+          id: edge.id,
+          source: edge.sources[0],
+          target: edge.targets[0],
+          type: 'smoothstep',
+          animated: true,
+        })),
     }))
     .catch((error) => {
       console.error(error);
@@ -225,12 +226,14 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
   const { toast } = useToast();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  const [visableLayoutedNodes, setVisableLayoutedNodes] = useState<Node[]>([]);
+  const [visableEdges, setVisableEdges] = useState<Edge[]>([]);
   const [initialLoading, setInitialLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [config, setConfig] = useState<LineageConfig>({
     upstreamDepth: 1,
     downstreamDepth: 1,
-    limit: 10,
+    limit: 5,
   });
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
   const [dagName, setDagName] = useState('');
@@ -449,11 +452,12 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
     debounceRef.current = setTimeout(() => {
       getLayoutedElements(nodes, edges, elkOptions).then(
         ({ nodes: layoutedNodes, edges: layoutedEdges }) => {
-          setNodes(layoutedNodes);
-          setEdges(layoutedEdges);
+          setVisableLayoutedNodes(layoutedNodes);
+          setVisableEdges(layoutedEdges);
 
           // Fit view only on initial load
           if (isInitialLoad) {
+            setInitialLoading(false);
             setTimeout(() => {
               fitView({ padding: 0.2, duration: 500 });
             }, 100);
@@ -477,9 +481,10 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
   const handleLoad = useCallback(async (nodeId: string, direction: 'upstream' | 'downstream') => {
     setLoadingMore(true);
     try {
+      // Fetch all dependencies (limit=1000), then apply display limit as hidden
       const lineageRes = direction === 'downstream'
-        ? await lineageAPI.getDownstreamLineage(nodeId, 1, config.limit)
-        : await lineageAPI.getUpstreamLineage(nodeId, 1, config.limit);
+        ? await lineageAPI.getDownstreamLineage(nodeId, 1, 1000)
+        : await lineageAPI.getUpstreamLineage(nodeId, 1, 1000);
 
       const existingNodeIds = new Set(nodes.map(n => n.id));
       const existingEdgeIds = new Set(edges.map(e => e.id));
@@ -517,12 +522,21 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
                 direction,
                 level: 2,
                 loaded: { upstream: false, downstream: false },
-                hidden: false,
+                hidden: existingCount >= config.limit,
                 selected: false,
                 collapsed: { upstream: false, downstream: false },
               },
             };
             newNodes.push(node);
+          } else {
+            // Node already exists but may be hidden — unhide it
+            const existingNode = nodes.find(n => n.id === newNodeId);
+            if (existingNode?.data.hidden) {
+              newNodes.push({
+                ...existingNode,
+                data: { ...existingNode.data, hidden: false },
+              });
+            }
           }
 
           path.relationships.forEach((rel) => {
@@ -603,8 +617,8 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
     setInitialLoading(true);
     try {
       const [upstreamRes, downstreamRes] = await Promise.all([
-        lineageAPI.getUpstreamLineage(entityId, config.upstreamDepth, config.limit),
-        lineageAPI.getDownstreamLineage(entityId, config.downstreamDepth, config.limit),
+        lineageAPI.getUpstreamLineage(entityId, config.upstreamDepth, 1000),
+        lineageAPI.getDownstreamLineage(entityId, config.downstreamDepth, 1000),
       ]);
 
       const newNodes: Node[] = [];
@@ -631,6 +645,10 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
       nodeMap.set(entityId, centerNode);
       newNodes.push(centerNode);
 
+      // Track order of first appearance per direction for applying display limit
+      const upstreamOrder: string[] = [];
+      const downstreamOrder: string[] = [];
+
       // Process upstream paths
       upstreamRes.paths.forEach((path) => {
         const pathNodes = path.nodes;
@@ -642,6 +660,7 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
           const description = upstreamNode.properties.description || upstreamNode.properties.comment || '';
 
           if (!nodeMap.has(nodeId)) {
+            upstreamOrder.push(nodeId);
             const node: Node = {
               id: nodeId,
               type: 'custom',
@@ -691,6 +710,7 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
           const description = downstreamNode.properties.description || downstreamNode.properties.comment || '';
 
           if (!nodeMap.has(nodeId)) {
+            downstreamOrder.push(nodeId);
             const node: Node = {
               id: nodeId,
               type: 'custom',
@@ -729,12 +749,23 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
         }
       });
 
+      // Apply display limit: mark nodes beyond config.limit as hidden per direction
+      const hiddenUpstreamIds = new Set(upstreamOrder.slice(config.limit));
+      const hiddenDownstreamIds = new Set(downstreamOrder.slice(config.limit));
+      const hiddenIds = new Set([...hiddenUpstreamIds, ...hiddenDownstreamIds]);
+
+      const nodesWithHidden = newNodes.map(node => {
+        if (hiddenIds.has(node.id)) {
+          return { ...node, data: { ...node.data, hidden: true } };
+        }
+        return node;
+      });
+
       // Set nodes and edges, let useEffect handle layout
-      setNodes(newNodes);
+      setNodes(nodesWithHidden);
       setEdges(newEdges);
     } catch (error) {
       console.error('Error loading lineage:', error);
-    } finally {
       setInitialLoading(false);
     }
   }, [entityId, tableName, config]);
@@ -814,6 +845,10 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
             </div>
           )}
         </div>
+        <HiddenNodesPanel
+          nodes={nodes}
+          onToggleHide={handleToggleHide}
+        />
         <LineageConfigPanel
           config={config}
           onConfigChange={setConfig}
@@ -821,8 +856,8 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
         />
       </div>
       <ReactFlow
-        nodes={nodes}
-        edges={edges}
+        nodes={visableLayoutedNodes}
+        edges={visableEdges}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.2 }}

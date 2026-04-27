@@ -176,7 +176,7 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
           <p className="text-sm font-medium text-gray-700">{`日期: ${label}`}</p>
           {payload.map((entry: any, index: number) => (
             <p key={index} className="text-xs" style={{ color: entry.color }}>
-              {`${entry.name}: ${entry.payload.timeStr}`}
+              {`${entry.name}: ${entry.payload[`${entry.dataKey}_str`]}`}
             </p>
           ))}
         </div>

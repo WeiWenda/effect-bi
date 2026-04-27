@@ -61,7 +61,7 @@ function Lineage(): React.JSX.Element {
         setSuggestions([]);
         setShowSuggestions(false);
       }
-    }, 3000);
+    }, 1000);
 
     return () => clearTimeout(timer);
   }, [searchQuery]);
@@ -159,7 +159,7 @@ function Lineage(): React.JSX.Element {
             <div className="flex flex-col items-center justify-center py-20 text-gray-400">
               <SearchIcon className="size-16 mb-4 text-gray-300" />
               <p className="text-lg">输入关键词搜索血缘数据</p>
-              <p className="text-sm mt-2">暂停输入 3 秒后将显示搜索建议</p>
+              <p className="text-sm mt-2">暂停输入 1 秒后将显示搜索建议</p>
             </div>
 
             {/* Top Tables Cards */}

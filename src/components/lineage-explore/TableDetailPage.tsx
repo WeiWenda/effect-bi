@@ -13,7 +13,10 @@ export function TableDetailPage(): React.JSX.Element {
   const [activeTab, setActiveTab] = useState<TabType>('lineage');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isInfoCollapsed, setIsInfoCollapsed] = useState(false);
+  const [isInfoCollapsed, setIsInfoCollapsed] = useState(() => {
+    const saved = localStorage.getItem('lineage-detail-info-collapsed');
+    return saved === 'true';
+  });
   const [tableData, setTableData] = useState<{
     tableName: string;
     description: string;
@@ -55,6 +58,11 @@ export function TableDetailPage(): React.JSX.Element {
   const handleBack = () => {
     navigate('/lineage');
   };
+
+  // Persist collapse state
+  useEffect(() => {
+    localStorage.setItem('lineage-detail-info-collapsed', String(isInfoCollapsed));
+  }, [isInfoCollapsed]);
 
   return (
     <div className="h-full flex flex-col bg-gray-50 p-6">

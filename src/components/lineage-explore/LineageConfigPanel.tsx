@@ -67,7 +67,7 @@ export function LineageConfigPanel({ config, onConfigChange, onApply }: LineageC
 
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">
-                每层展示数量
+                默认展开数量
               </label>
               <input
                 type="number"
