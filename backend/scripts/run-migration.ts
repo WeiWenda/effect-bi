@@ -14,6 +14,7 @@ async function runMigration() {
   const migrationFiles = [
     'create_dag_views.sql',
     'create_task_instances.sql',
+    'create_task_info.sql',
   ];
 
   const client = await pool.connect();

@@ -1,5 +1,6 @@
 -- Create task run instances table
 CREATE TABLE IF NOT EXISTS task_instances (
+  id SERIAL PRIMARY KEY,
   task_file VARCHAR(512) NOT NULL,
   partition_date DATE NOT NULL,
   attempt INTEGER NOT NULL,
@@ -8,7 +9,7 @@ CREATE TABLE IF NOT EXISTS task_instances (
   status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failed', 'running')),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (task_file, partition_date, attempt)
+  UNIQUE(task_file, partition_date, attempt)
 );
 
 -- Create index on task_file for faster lookups

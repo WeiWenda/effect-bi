@@ -190,7 +190,10 @@ async function insertTaskInstances(instances: TaskInstance[]): Promise<void> {
       const query = `
         INSERT INTO task_instances (task_file, partition_date, attempt, start_time, end_time, status)
         VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (task_file, partition_date, attempt) DO NOTHING
+        ON CONFLICT (task_file, partition_date, attempt) DO UPDATE SET
+          start_time = EXCLUDED.start_time,
+          end_time = EXCLUDED.end_time,
+          status = EXCLUDED.status
       `;
       await client.query(query, [
         instance.task_file,

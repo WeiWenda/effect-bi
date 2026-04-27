@@ -137,7 +137,7 @@ router.get('/dag/:dagId', async (req: Request, res: Response): Promise<void> => 
     startDate.setHours(0, 0, 0, 0);
 
     const query = `
-      SELECT task_file, partition_date, attempt, start_time, end_time, status
+      SELECT id, task_file, partition_date, attempt, start_time, end_time, status
       FROM task_instances
       WHERE partition_date >= $1 AND partition_date <= $2
         AND task_file = ANY($3)
