@@ -6,6 +6,7 @@ import lineageRoutes from './routes/lineage.js';
 import dagRoutes from './routes/dag.js';
 import fileserverRoutes from './routes/fileserver.js';
 import taskRoutes from './routes/task.js';
+import cubeRoutes from './routes/cube.js';
 
 dotenv.config();
 
@@ -21,6 +22,7 @@ app.use('/api/lineage', lineageRoutes);
 app.use('/api/dag', dagRoutes);
 app.use('/api/file', fileserverRoutes);
 app.use('/api/task', taskRoutes);
+app.use('/api/cube', cubeRoutes);
 
 // Health check
 app.get('/health', (req: Request, res: Response) => {

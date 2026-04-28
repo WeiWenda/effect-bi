@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ArrowLeftIcon } from 'lucide-react';
+import { ArrowLeftIcon, Network as NetworkIcon } from 'lucide-react';
 import {
   ReactFlow,
   Node,
@@ -294,17 +294,19 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
       <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center gap-4 shrink-0">
         <button
           onClick={onBack}
-          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          title="返回列表"
+          className="flex items-center gap-2 text-gray-600 hover:text-gray-800 transition-colors"
         >
-          <ArrowLeftIcon className="size-5 text-gray-600" />
+          <ArrowLeftIcon className="size-5" />
+          <span className="text-sm">返回列表</span>
         </button>
-        <div>
-          <h1 className="text-xl font-semibold text-gray-800">{dagView?.name || 'DAG 详情'}</h1>
-          {dagView?.description && (
-            <p className="text-sm text-gray-600 mt-1">{dagView.description}</p>
-          )}
-        </div>
+        {dagView && (
+          <div className="flex items-center gap-2 text-sm">
+            <NetworkIcon className="size-4 text-blue-600" />
+            <span className="font-medium text-gray-800">{dagView.name}</span>
+            <span className="text-gray-500">|</span>
+            <span className="text-gray-600">{dagView.nodeIds.length} 个节点</span>
+          </div>
+        )}
       </div>
 
       {/* Scrollable area below header */}

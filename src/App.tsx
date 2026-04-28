@@ -4,6 +4,8 @@ import Login from './components/Login';
 import Chat from './components/Chat';
 import Lineage from './components/Lineage';
 import Dags from './components/Dags';
+import Cubes from './components/Cubes';
+import { ETL } from './components/ETL';
 import { TableDetailPage } from './components/lineage-explore/TableDetailPage';
 import Navbar from './components/Navbar';
 import { TooltipProvider } from './components/ui/tooltip';
@@ -80,6 +82,9 @@ function App(): React.JSX.Element {
               <Route path="lineage/table/:tableName" element={<TableDetailPage />} />
               <Route path="dags" element={<Dags />} />
               <Route path="dags/:id" element={<Dags />} />
+              <Route path="cube" element={<Cubes />} />
+              <Route path="cube/:name" element={<Cubes />} />
+              <Route path="etl" element={<ETL />} />
               <Route index element={<Navigate to="/chat" replace />} />
             </Route>
             <Route path="*" element={<Navigate to="/login" />} />

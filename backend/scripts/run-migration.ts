@@ -15,6 +15,7 @@ async function runMigration() {
     'create_dag_views.sql',
     'create_task_instances.sql',
     'create_task_info.sql',
+    'create_cube_versions.sql'
   ];
 
   const client = await pool.connect();

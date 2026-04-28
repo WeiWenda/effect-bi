@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { MessageSquareIcon, NetworkIcon, ListTodoIcon, LogOutIcon, UserIcon } from 'lucide-react';
+import { MessageSquareIcon, NetworkIcon, ListTodoIcon, BoxIcon, ZapIcon, LogOutIcon, UserIcon } from 'lucide-react';
 import { tokenStorage } from '../services/llmApi';
 
 function Navbar(): React.JSX.Element {
@@ -19,6 +19,12 @@ function Navbar(): React.JSX.Element {
     }
     if (path === '/dags') {
       return location.pathname.startsWith('/dags');
+    }
+    if (path === '/cube') {
+      return location.pathname.startsWith('/cube');
+    }
+    if (path === '/etl') {
+      return location.pathname.startsWith('/etl');
     }
     return location.pathname === path;
   };
@@ -46,7 +52,7 @@ function Navbar(): React.JSX.Element {
           }`}
         >
           <NetworkIcon className="size-4" />
-          血缘
+          Lineage
         </button>
         <button
           onClick={() => navigate('/dags')}
@@ -57,7 +63,29 @@ function Navbar(): React.JSX.Element {
           }`}
         >
           <ListTodoIcon className="size-4" />
-          任务开发
+          DAG
+        </button>
+        <button
+          onClick={() => navigate('/cube')}
+          className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            isActive('/cube')
+              ? 'bg-white text-gray-800 shadow-sm'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <BoxIcon className="size-4" />
+          Cube
+        </button>
+        <button
+          onClick={() => navigate('/etl')}
+          className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            isActive('/etl')
+              ? 'bg-white text-gray-800 shadow-sm'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <ZapIcon className="size-4" />
+          ETL
         </button>
       </div>
 
