@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { SearchIcon, Loader2Icon, Trash2Icon } from 'lucide-react';
+import { SearchIcon, Loader2Icon, Trash2Icon, KeyIcon } from 'lucide-react';
 import { gravitinoAPI, ColumnInfo } from '../../services/gravitinoApi';
 
 interface TableNodeInfo {
@@ -7,6 +7,9 @@ interface TableNodeInfo {
   catalog: string;
   schema: string;
   table: string;
+  type: 'table' | 'sql';
+  sql?: string;
+  sqlFields?: string[];
 }
 
 export type FieldRole = 'measure' | 'dimension';
@@ -27,6 +30,7 @@ export interface FieldItem {
   expression: string;
   fieldDescription: string;
   isManual: boolean;
+  isPrimaryKey: boolean;
 }
 
 interface FieldListPanelProps {
@@ -50,7 +54,38 @@ export function FieldListPanel({ tableNodes, fields, setFields }: FieldListPanel
       const allFields: FieldItem[] = [];
       for (const node of tableNodes) {
         try {
+          // SQL node: use sqlFields from node data
+          if (node.type === 'sql') {
+            const sqlFields = node.sqlFields || [];
+            const columns: FieldItem[] = sqlFields.map((fieldName: string) => ({
+              id: `${node.id}-${fieldName}`,
+              tableId: node.id,
+              tableName: node.table,
+              fieldName,
+              datatype: 'string',
+              role: 'dimension' as FieldRole,
+              isOutput: true,
+              expression: '',
+              fieldDescription: '',
+              isManual: false,
+              isPrimaryKey: false,
+            }));
+            allFields.push(...columns);
+            continue;
+          }
+          // Table node: load from API
           const response = await gravitinoAPI.getTableDetail(node.catalog, node.schema, node.table);
+          // Extract primary key field names from indexes
+          const primaryKeyFields = new Set<string>();
+          if (response.table.indexes) {
+            for (const idx of response.table.indexes) {
+              if (idx.indexType === 'PRIMARY_KEY') {
+                for (const fn of idx.fieldNames) {
+                  for (const f of fn) primaryKeyFields.add(f);
+                }
+              }
+            }
+          }
           const columns: FieldItem[] = response.table.columns.map((col: ColumnInfo) => ({
             id: `${node.id}-${col.name}`,
             tableId: node.id,
@@ -62,6 +97,7 @@ export function FieldListPanel({ tableNodes, fields, setFields }: FieldListPanel
             expression: '',
             fieldDescription: col.comment || '',
             isManual: false,
+            isPrimaryKey: primaryKeyFields.has(col.name),
           }));
           allFields.push(...columns);
         } catch (err) {
@@ -79,7 +115,9 @@ export function FieldListPanel({ tableNodes, fields, setFields }: FieldListPanel
               isOutput: existing.isOutput,
               expression: existing.expression,
               fieldDescription: existing.fieldDescription || f.fieldDescription,
+              datatype: existing.datatype,
               isManual: false,
+              isPrimaryKey: f.isPrimaryKey,
             };
           }
           return f;
@@ -115,6 +153,7 @@ export function FieldListPanel({ tableNodes, fields, setFields }: FieldListPanel
       expression: '',
       fieldDescription: '',
       isManual: true,
+      isPrimaryKey: false,
     };
     setFields(prev => [...prev, newField]);
   };
@@ -210,7 +249,10 @@ export function FieldListPanel({ tableNodes, fields, setFields }: FieldListPanel
                         className="w-full text-sm border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 bg-transparent"
                       />
                     ) : (
-                      <span className="text-gray-700 whitespace-nowrap">{field.fieldName}</span>
+                      <span className="text-gray-700 whitespace-nowrap inline-flex items-center gap-1">
+                        {field.fieldName}
+                        {field.isPrimaryKey && <KeyIcon className="size-3 text-amber-500" title="Primary Key" />}
+                      </span>
                     )}
                   </td>
                   <td className="px-3 py-1.5 text-center whitespace-nowrap">

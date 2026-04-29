@@ -20,9 +20,10 @@ import {
   EdgeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { PlusIcon, CodeIcon, Trash2Icon } from 'lucide-react';
+import { PlusIcon, CodeIcon, Trash2Icon, TableIcon } from 'lucide-react';
 import { Button } from '../ui/button';
 import { JoinConditionDialog } from './JoinConditionDialog';
+import { SqlNodeDialog } from './SqlNodeDialog';
 import { gravitinoAPI } from '../../services/gravitinoApi';
 
 export type ModelType = 'fact' | 'dim';
@@ -35,6 +36,7 @@ export interface TableNodeData extends Record<string, unknown> {
   table?: string;
   type: 'table' | 'sql';
   sql?: string;
+  sqlFields?: string[];
   modelType?: ModelType;
 }
 
@@ -195,10 +197,23 @@ function CubeCanvasContent({ nodes, setNodes, edges, setEdges, onViewportChange,
   const [currentRightField, setCurrentRightField] = useState('');
   const [currentJoinType, setCurrentJoinType] = useState<JoinType>('inner');
 
+  const [sqlDialogOpen, setSqlDialogOpen] = useState(false);
+  const [editingSqlNodeId, setEditingSqlNodeId] = useState<string | null>(null);
+  const [editingSqlTableName, setEditingSqlTableName] = useState('');
+  const [editingSqlContent, setEditingSqlContent] = useState('');
+  const [editingSqlFields, setEditingSqlFields] = useState<string[]>([]);
+  const [editingSqlModelType, setEditingSqlModelType] = useState<ModelType>('dim');
+
   const loadFieldsForNode = async (nodeId: string): Promise<{ fields: string[]; tableName: string }> => {
     const node = nodes.find(n => n.id === nodeId);
-    if (!node || !node.data.catalog || !node.data.schema || !node.data.table) {
-      return { fields: [], tableName: node?.data.label || '' };
+    if (!node) return { fields: [], tableName: '' };
+    // SQL node: use sqlFields from node data
+    if (node.data.type === 'sql') {
+      return { fields: node.data.sqlFields || [], tableName: node.data.table || node.data.label };
+    }
+    // Table node: load from API
+    if (!node.data.catalog || !node.data.schema || !node.data.table) {
+      return { fields: [], tableName: node.data.label };
     }
     try {
       const response = await gravitinoAPI.getTableDetail(node.data.catalog, node.data.schema, node.data.table);
@@ -251,7 +266,7 @@ function CubeCanvasContent({ nodes, setNodes, edges, setEdges, onViewportChange,
         <div className={`px-4 py-3 ${bgColor} border-2 ${borderColor} rounded-lg shadow-sm min-w-[200px]`}>
           <Handle type="target" position={Position.Left} className="!bg-blue-400 !w-2 !h-2" />
           <div className="flex items-center gap-2 mb-2">
-            <CodeIcon className={`size-4 ${currentModelType === 'fact' ? 'text-amber-500' : 'text-blue-500'}`} />
+            <TableIcon className={`size-4 ${currentModelType === 'fact' ? 'text-amber-500' : 'text-blue-500'}`} />
             <div className="text-sm font-medium text-gray-800">{data.label}</div>
           </div>
           {data.catalog && data.schema && (
@@ -280,21 +295,58 @@ function CubeCanvasContent({ nodes, setNodes, edges, setEdges, onViewportChange,
         </div>
       );
     },
-    sqlNode: ({ data }: { data: TableNodeData }) => (
-      <div className="px-4 py-3 bg-white border-2 border-purple-300 rounded-lg shadow-sm min-w-[200px]">
-        <Handle type="target" position={Position.Left} className="!bg-purple-400 !w-2 !h-2" />
-        <div className="flex items-center gap-2 mb-2">
-          <CodeIcon className="size-4 text-purple-500" />
-          <div className="text-sm font-medium text-gray-800">{data.label}</div>
-        </div>
-        {data.sql && (
-          <div className="text-xs text-gray-500 font-mono truncate" title={data.sql}>
-            {data.sql}
+    sqlNode: ({ data, id }: { data: TableNodeData; id: string }) => {
+      const currentSqlModelType = data.modelType || 'dim';
+      const hasExistingFact = nodes.some(n => n.id !== id && n.data.modelType === 'fact');
+      const borderColor = currentSqlModelType === 'fact' ? 'border-amber-400' : 'border-blue-300';
+      const bgColor = currentSqlModelType === 'fact' ? 'bg-amber-50' : 'bg-white';
+      const iconColor = currentSqlModelType === 'fact' ? 'text-amber-500' : 'text-blue-500';
+      return (
+        <div
+          className={`px-4 py-3 ${bgColor} border-2 ${borderColor} rounded-lg shadow-sm min-w-[200px] cursor-pointer hover:shadow-md transition-shadow`}
+          onClick={() => {
+            setEditingSqlNodeId(id);
+            setEditingSqlTableName(data.table || data.label);
+            setEditingSqlContent(data.sql || '');
+            setEditingSqlFields(data.sqlFields || []);
+            setEditingSqlModelType(currentSqlModelType);
+            setSqlDialogOpen(true);
+          }}
+        >
+          <Handle type="target" position={Position.Left} className="!bg-blue-400 !w-2 !h-2" />
+          <div className="flex items-center gap-2 mb-2">
+            <CodeIcon className={`size-4 ${iconColor}`} />
+            <div className="text-sm font-medium text-gray-800">{data.table || data.label}</div>
           </div>
-        )}
-        <Handle type="source" position={Position.Right} className="!bg-purple-400 !w-2 !h-2" />
-      </div>
-    ),
+          <div className="inline-flex rounded-md shadow-sm">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!hasExistingFact) {
+                  setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, modelType: 'fact' } } : n));
+                }
+              }}
+              className={`rounded-l-md px-2 py-0.5 text-xs font-medium transition-colors ${currentSqlModelType === 'fact' ? 'bg-amber-500 text-white' : hasExistingFact ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+              disabled={currentSqlModelType !== 'fact' && hasExistingFact}
+            >
+              Fact
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, modelType: 'dim' } } : n));
+              }}
+              className={`-ml-px rounded-r-md px-2 py-0.5 text-xs font-medium transition-colors ${currentSqlModelType === 'dim' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+            >
+              Dim
+            </button>
+          </div>
+          <Handle type="source" position={Position.Right} className="!bg-blue-400 !w-2 !h-2" />
+        </div>
+      );
+    },
   };
 
   return (
@@ -349,6 +401,25 @@ function CubeCanvasContent({ nodes, setNodes, edges, setEdges, onViewportChange,
         initialLeftField={currentLeftField}
         initialRightField={currentRightField}
         initialJoinType={currentJoinType}
+      />
+
+      <SqlNodeDialog
+        open={sqlDialogOpen}
+        onClose={() => { setSqlDialogOpen(false); setEditingSqlNodeId(null); }}
+        onConfirm={({ tableName, sql, sqlFields, modelType }) => {
+          if (!editingSqlNodeId) return;
+          setNodes(nds => nds.map(n => n.id === editingSqlNodeId ? {
+            ...n,
+            data: { ...n.data, label: tableName, table: tableName, sql, sqlFields, modelType },
+          } : n));
+          setEditingSqlNodeId(null);
+        }}
+        initialTableName={editingSqlTableName}
+        initialSql={editingSqlContent}
+        initialSqlFields={editingSqlFields}
+        initialModelType={editingSqlModelType}
+        hasExistingFact={nodes.some(n => n.id !== editingSqlNodeId && n.data.modelType === 'fact')}
+        currentModelType={editingSqlModelType}
       />
     </div>
   );

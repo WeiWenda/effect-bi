@@ -50,9 +50,9 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 
     // Insert an initial version
     const result = await pool.query(
-      `INSERT INTO cube_versions (name, remark, canvas_data, field_list, yaml_content)
-       VALUES ($1, '初始版本', '{}', '[]', '')
-       RETURNING id, name, remark, is_published, canvas_data, field_list, yaml_content, created_at, updated_at`,
+      `INSERT INTO cube_versions (name, remark, canvas_data, field_list, model_json, model_yml, model_view)
+       VALUES ($1, '初始版本', '{}', '[]', '[]', '', '')
+       RETURNING id, name, remark, is_published, canvas_data, field_list, model_json, model_yml, model_view, created_at, updated_at`,
       [name]
     );
 
@@ -98,7 +98,7 @@ router.get('/versions', async (req: Request, res: Response): Promise<void> => {
     }
 
     const result = await pool.query(
-      `SELECT id, name, remark, is_published, canvas_data, field_list, yaml_content, created_at, updated_at
+      `SELECT id, name, remark, is_published, canvas_data, field_list, model_json, model_yml, model_view, created_at, updated_at
        FROM cube_versions
        WHERE name = $1
        ORDER BY created_at DESC`,
@@ -120,7 +120,7 @@ router.get('/versions/:id', async (req: Request, res: Response): Promise<void> =
   try {
     const { id } = req.params;
     const result = await pool.query(
-      `SELECT id, name, remark, is_published, canvas_data, field_list, yaml_content, created_at, updated_at
+      `SELECT id, name, remark, is_published, canvas_data, field_list, model_json, model_yml, model_view, created_at, updated_at
        FROM cube_versions
        WHERE id = $1`,
       [id]
@@ -145,7 +145,7 @@ router.get('/versions/:id', async (req: Request, res: Response): Promise<void> =
  */
 router.post('/versions', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, remark, canvasData, fieldList, yamlContent } = req.body;
+    const { name, remark, canvasData, fieldList, modelJson, modelYml, modelView } = req.body;
 
     if (!name) {
       res.status(400).json({ error: 'name is required' });
@@ -158,10 +158,10 @@ router.post('/versions', async (req: Request, res: Response): Promise<void> => {
     const finalRemark = remark || `table_${tableCount}_column_${columnCount}`;
 
     const result = await pool.query(
-      `INSERT INTO cube_versions (name, remark, canvas_data, field_list, yaml_content)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, name, remark, is_published, canvas_data, field_list, yaml_content, created_at, updated_at`,
-      [name, finalRemark, JSON.stringify(canvasData || {}), JSON.stringify(fieldList || []), yamlContent || '']
+      `INSERT INTO cube_versions (name, remark, canvas_data, field_list, model_json, model_yml, model_view)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, remark, is_published, canvas_data, field_list, model_json, model_yml, model_view, created_at, updated_at`,
+      [name, finalRemark, JSON.stringify(canvasData || {}), JSON.stringify(fieldList || []), modelJson || '[]', modelYml || '', modelView || '']
     );
 
     res.status(201).json({ version: result.rows[0] });
@@ -205,7 +205,7 @@ router.put('/versions/:id/publish', async (req: Request, res: Response): Promise
     // Publish the selected version
     const result = await client.query(
       `UPDATE cube_versions SET is_published = true WHERE id = $1
-       RETURNING id, name, remark, is_published, canvas_data, field_list, yaml_content, created_at, updated_at`,
+       RETURNING id, name, remark, is_published, canvas_data, field_list, model_json, model_yml, model_view, created_at, updated_at`,
       [id]
     );
 

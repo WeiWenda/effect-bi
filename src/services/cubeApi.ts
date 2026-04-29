@@ -20,7 +20,9 @@ export interface CubeVersion {
     viewport?: any;
   };
   field_list: any[];
-  yaml_content: string;
+  model_json: any;
+  model_yml: string;
+  model_view: string;
   created_at: string;
   updated_at: string;
 }
@@ -34,7 +36,9 @@ export interface SaveVersionRequest {
     viewport?: any;
   };
   fieldList: any[];
-  yamlContent: string;
+  modelJson: string;
+  modelYml: string;
+  modelView: string;
 }
 
 export interface ListCubesResponse {

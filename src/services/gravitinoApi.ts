@@ -30,11 +30,18 @@ export interface ColumnInfo {
   comment?: string;
 }
 
+export interface IndexInfo {
+  indexType: string;
+  name: string;
+  fieldNames: string[][];
+}
+
 export interface TableDetailResponse {
   code: number;
   table: {
     name: string;
     columns: ColumnInfo[];
+    indexes?: IndexInfo[];
   };
 }
 

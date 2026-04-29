@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { Node, Edge } from '@xyflow/react';
 import { DatabaseIcon, EyeIcon, HistoryIcon, ChevronLeftIcon } from 'lucide-react';
+import yaml from 'js-yaml';
 import { MetadataTreePanel } from './cube-explore/MetadataTreePanel';
 import { CubeCanvas, TableNodeData, JoinEdgeData } from './cube-explore/CubeCanvas';
 import { FieldListPanel, FieldItem } from './cube-explore/FieldListPanel';
@@ -42,8 +43,10 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
   const [nodes, setNodes] = useState<Node<TableNodeData>[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [fields, setFields] = useState<FieldItem[]>([]);
-  const [yamlContent, setYamlContent] = useState(generateDefaultCubeJson);
-  const [previewYaml, setPreviewYaml] = useState('');
+  const [modelJson, setModelJson] = useState(generateDefaultCubeJson);
+  const [modelYml, setModelYml] = useState('');
+  const [modelView, setModelView] = useState('');
+  const [previewTab, setPreviewTab] = useState<'model' | 'view'>('model');
   const [currentVersion, setCurrentVersion] = useState<{ id: number; remark: string; is_published: boolean } | null>(null);
   const [loadedViewport, setLoadedViewport] = useState<{ x: number; y: number; zoom: number } | null>(null);
   const viewportRef = useRef<{ x: number; y: number; zoom: number }>({ x: 0, y: 0, zoom: 1 });
@@ -53,12 +56,15 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
   const draggingRef = useRef(false);
 
   const tableNodes = useMemo(() => nodes
-    .filter(n => n.data.type === 'table' && n.data.catalog && n.data.schema && n.data.table)
+    .filter(n => (n.data.type === 'table' && n.data.catalog && n.data.schema && n.data.table) || (n.data.type === 'sql' && n.data.table))
     .map(n => ({
       id: n.id,
-      catalog: n.data.catalog!,
-      schema: n.data.schema!,
+      catalog: n.data.catalog || '',
+      schema: n.data.schema || '',
       table: n.data.table!,
+      type: n.data.type,
+      sql: n.data.sql,
+      sqlFields: n.data.sqlFields,
     })), [nodes]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -91,7 +97,7 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
     document.body.style.userSelect = 'none';
   }, []);
 
-  const handleLoadVersion = useCallback((version: { canvas_data: any; field_list: any; yaml_content: string; remark: string; id: number; is_published: boolean }) => {
+  const handleLoadVersion = useCallback((version: { canvas_data: any; field_list: any; model_json: any; model_yml: string; model_view: string; remark: string; id: number; is_published: boolean }) => {
     if (version.canvas_data?.nodes) {
       setNodes(version.canvas_data.nodes);
     }
@@ -105,54 +111,78 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
     if (version.field_list) {
       setFields(version.field_list);
     }
-    if (version.yaml_content) {
-      setYamlContent(version.yaml_content);
+    if (version.model_json) {
+      setModelJson(typeof version.model_json === 'string' ? version.model_json : JSON.stringify(version.model_json, null, 2));
+    }
+    if (version.model_yml) {
+      setModelYml(version.model_yml);
+    }
+    if (version.model_view) {
+      setModelView(version.model_view);
     }
     setCurrentVersion({ id: version.id, remark: version.remark, is_published: version.is_published });
   }, []);
 
-  const handlePreviewYaml = useCallback((yaml: string) => {
-    setPreviewYaml(yaml);
+  const handlePreviewYaml = useCallback((tab: 'model' | 'view') => {
+    setPreviewTab(tab);
     setShowYamlPreview(true);
   }, []);
 
-  // Generate Cube.js Dynamic Data Model JSON (pure frontend, for asyncModule)
-  // Each table with output fields becomes its own cube; joins connect cubes
+  // Generate Cube.js Dynamic Data Model: model_json, model_yml, model_view
   const handleGenerateYaml = useCallback(() => {
     if (nodes.length === 0 || fields.filter(f => f.isOutput).length === 0) {
-      setYamlContent(JSON.stringify({ error: 'No tables or output fields configured yet' }, null, 2));
-      setPreviewYaml(''); setShowYamlPreview(true); return;
+      setModelJson(JSON.stringify({ error: 'No tables or output fields configured yet' }, null, 2));
+      setModelYml(''); setModelView(''); setPreviewTab('model'); setShowYamlPreview(true); return;
     }
-    const tableNodes = nodes.filter(n => n.data.type === 'table' && n.data.catalog && n.data.schema && n.data.table);
+    const tableNodes = nodes.filter(n => (n.data.type === 'table' && n.data.catalog && n.data.schema && n.data.table) || (n.data.type === 'sql' && n.data.table));
     if (tableNodes.length === 0) {
-      setYamlContent(JSON.stringify({ error: 'No valid table nodes found' }, null, 2));
-      setPreviewYaml(''); setShowYamlPreview(true); return;
+      setModelJson(JSON.stringify({ error: 'No valid table nodes found' }, null, 2));
+      setModelYml(''); setModelView(''); setPreviewTab('model'); setShowYamlPreview(true); return;
     }
 
     const outputFields = fields.filter(f => f.isOutput);
+    const factNodeId = tableNodes.find(n => n.data.modelType === 'fact')?.id;
+    const defaultTableId = factNodeId || (tableNodes.length > 0 ? tableNodes[0].id : '');
     const fieldsByTable = new Map<string, FieldItem[]>();
     for (const f of outputFields) {
-      const list = fieldsByTable.get(f.tableId) || [];
-      list.push(f); fieldsByTable.set(f.tableId, list);
+      const tid = f.tableId || defaultTableId;
+      const list = fieldsByTable.get(tid) || [];
+      list.push(f); fieldsByTable.set(tid, list);
     }
 
-    // Fact table uses cubeName as cube name; dim tables use table name
-    const factNodeId = tableNodes.find(n => n.data.modelType === 'fact')?.id;
-
+    // --- Generate model_json (cube models) ---
     const cubeModels: any[] = [];
+    // Build tableId -> cubeName mapping for view generation
+    const tableIdToCubeName = new Map<string, string>();
+    for (const tn of tableNodes) {
+      const cName = tn.data.table!.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+      tableIdToCubeName.set(tn.id, cName);
+    }
+    const factCubeNameStr = tableIdToCubeName.get(factNodeId || '') || ''
+
     for (const tn of tableNodes) {
       const tFields = fieldsByTable.get(tn.id);
       if (!tFields || tFields.length === 0) continue;
       const isFact = tn.data.modelType === 'fact';
-      const cName = isFact ? cubeName.toLowerCase().replace(/[^a-z0-9_]/g, '_') : tn.data.table!.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+      const cName = tableIdToCubeName.get(tn.id)!;
       const measures: Record<string, any> = {};
       const dimensions: Record<string, any> = {};
       for (const f of tFields) {
         const fk = f.fieldName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+        const fieldCubeName = tableIdToCubeName.get(f.tableId || defaultTableId) || factCubeNameStr;
+        const sqlRef = `{${fieldCubeName}}.${f.fieldName}`;
         if (f.role === 'measure') {
-          measures[fk] = { sql: f.expression || f.fieldName, type: inferMeasureType(f.datatype, f.expression), ...(f.fieldDescription && { description: f.fieldDescription }) };
+          const mType = inferMeasureType(f.datatype, f.expression);
+          const isAggregateType = ['count', 'sum', 'avg', 'min', 'max', 'count_distinct', 'count_distinct_approx'].includes(mType);
+          if (isAggregateType && f.expression) {
+            measures[fk] = { type: mType, filters: [{ sql: f.expression }], ...(f.fieldDescription && { description: f.fieldDescription }) };
+          } else if (!isAggregateType && f.expression) {
+            measures[fk] = { sql: f.expression, type: mType, ...(f.fieldDescription && { description: f.fieldDescription }) };
+          } else {
+            measures[fk] = { sql: sqlRef, type: mType, ...(f.fieldDescription && { description: f.fieldDescription }) };
+          }
         } else {
-          dimensions[fk] = { sql: f.fieldName, type: mapDataTypeToCube(f.datatype), ...(f.fieldDescription && { description: f.fieldDescription }) };
+          dimensions[fk] = { sql: f.expression || sqlRef, type: mapDataTypeToCube(f.datatype), ...(f.isPrimaryKey && { primary_key: true }), ...(f.fieldDescription && { description: f.fieldDescription }) };
         }
       }
       // Joins: edges where this table is source
@@ -165,22 +195,95 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
         const tgt = nodes.find(n => n.id === edge.target);
         if (!src || !tgt || src.id !== tn.id) continue;
         const tgtIsFact = tgt.id === factNodeId;
-        const jName = tgtIsFact ? cubeName.toLowerCase().replace(/[^a-z0-9_]/g, '_') : tgt.data.table!.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+        const jName = tgtIsFact ? factCubeNameStr : (tableIdToCubeName.get(tgt.id) || tgt.data.table!.toLowerCase().replace(/[^a-z0-9_]/g, '_'));
         if (seen.has(jName)) continue; seen.add(jName);
-        // Relationship: fact→dim = many_to_one, dim→fact = one_to_many
         const relationship = isFact && !tgtIsFact ? 'many_to_one' : !isFact && tgtIsFact ? 'one_to_many' : 'many_to_one';
-        joins[jName] = { sql: `{CUBE}.${ed.leftField} = {${jName}.${ed.rightField}`, relationship };
+        joins[jName] = { sql: `{${cName}}.${ed.leftField} = {${jName}}.${ed.rightField}`, relationship };
       }
+      const isSqlNode = tn.data.type === 'sql';
       cubeModels.push({
-        name: cName, title: isFact ? cubeName : tn.data.table,
-        description: `Cube for ${tn.data.schema}.${tn.data.table}`,
-        sql_table: `${tn.data.schema}.${tn.data.table}`,
+        name: cName, title: tn.data.table,
+        ...(isSqlNode
+          ? { description: `Cube for SQL: ${tn.data.table}`, sql: tn.data.sql }
+          : { description: `Cube for ${tn.data.schema}.${tn.data.table}`, sql_table: `${tn.data.schema}.${tn.data.table}` }
+        ),
         measures, dimensions,
         ...(Object.keys(joins).length > 0 && { joins }),
       });
     }
-    setYamlContent(JSON.stringify(cubeModels, null, 2));
-    setPreviewYaml(''); setShowYamlPreview(true);
+
+    // --- Generate model_yml (YAML format of cube models) ---
+    const toArrayWithName = (obj: Record<string, any> | undefined): any[] | undefined => {
+      if (!obj || Object.keys(obj).length === 0) return undefined;
+      return Object.entries(obj).map(([key, val]) => ({ name: key, ...val }));
+    };
+    const cubesForYaml = cubeModels.map((cube: any) => ({
+      ...cube,
+      measures: toArrayWithName(cube.measures),
+      dimensions: toArrayWithName(cube.dimensions),
+      joins: toArrayWithName(cube.joins),
+    }));
+    const modelYmlStr = yaml.dump({ cubes: cubesForYaml }, { indent: 2, lineWidth: -1, noRefs: true, quotingType: '"' });
+
+    // --- Generate model_view (Cube.js View YAML) ---
+    // Build join path graph: from fact cube, trace edges to dim cubes
+    const factNode = tableNodes.find(n => n.data.modelType === 'fact') || tableNodes[0];
+    const joinPathMap = new Map<string, string[]>(); // cubeName -> join_path parts
+    // BFS from fact cube to build join paths
+    const visited = new Set<string>();
+    const queue: { nodeId: string; path: string[] }[] = [{ nodeId: factNode.id, path: [factCubeNameStr] }];
+    visited.add(factNode.id);
+    while (queue.length > 0) {
+      const { nodeId, path } = queue.shift()!;
+      joinPathMap.set(nodeId, path);
+      // Find edges from this node
+      for (const edge of edges) {
+        const ed = edge.data as JoinEdgeData | undefined;
+        if (!ed?.leftField || !ed?.rightField) continue;
+        const src = nodes.find(n => n.id === edge.source);
+        const tgt = nodes.find(n => n.id === edge.target);
+        if (!src || !tgt) continue;
+        if (src.id === nodeId && !visited.has(tgt.id)) {
+          const tgtCubeName = tableIdToCubeName.get(tgt.id) || tgt.data.table!.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+          visited.add(tgt.id);
+          queue.push({ nodeId: tgt.id, path: [...path, tgtCubeName] });
+        }
+        if (tgt.id === nodeId && !visited.has(src.id)) {
+          const srcCubeName = tableIdToCubeName.get(src.id) || src.data.table!.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+          visited.add(src.id);
+          queue.push({ nodeId: src.id, path: [...path, srcCubeName] });
+        }
+      }
+    }
+
+    // Build view cubes list
+    const viewCubes: any[] = [];
+    for (const tn of tableNodes) {
+      const tFields = fieldsByTable.get(tn.id);
+      if (!tFields || tFields.length === 0) continue;
+      const cName = tableIdToCubeName.get(tn.id)!;
+      const pathParts = joinPathMap.get(tn.id);
+      const joinPath = pathParts ? pathParts.join('.') : cName;
+      const includes: string[] = [];
+      for (const f of tFields) {
+        includes.push(f.fieldName.toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+      }
+      const isFact = tn.data.modelType === 'fact';
+      viewCubes.push({ join_path: joinPath, ...(!isFact && { prefix: true }), includes });
+    }
+
+    const viewDef = {
+      views: [{
+        name: cubeName.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+        cubes: viewCubes,
+      }]
+    };
+    const modelViewStr = yaml.dump(viewDef, { indent: 2, lineWidth: -1, noRefs: true, quotingType: '"' });
+
+    setModelJson(JSON.stringify(cubeModels, null, 2));
+    setModelYml(modelYmlStr);
+    setModelView(modelViewStr);
+    setPreviewTab('model'); setShowYamlPreview(true);
   }, [nodes, edges, fields, cubeName]);
 
   // Map database column type -> Cube.js dimension type
@@ -201,16 +304,14 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
   // Infer Cube.js measure type from column type and expression
   // Cube.js measure types: count, sum, avg, min, max, count_distinct, count_distinct_approx, number, string, time, boolean
   function inferMeasureType(dataType: string, expression?: string): string {
-    if (expression) {
-      // Custom expression -> use 'number' (requires aggregate function in sql)
-      return 'number';
-    }
     const lower = dataType.toLowerCase();
-    if (lower.includes('int') || lower.includes('decimal') || lower.includes('float') || lower.includes('double') || lower.includes('numeric') || lower.includes('real')) {
-      return 'sum';
+    // If already a Cube.js measure type, return directly
+    if (['count', 'sum', 'avg', 'min', 'max', 
+      'count_distinct', 'count_distinct_approx', 
+      'number', 'string', 'time', 'boolean'].includes(lower)) {
+      return lower;
     }
-    // Non-numeric columns as measure default to count
-    return 'count';
+    return 'number';
   }
 
   // Load latest version on mount
@@ -223,7 +324,9 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
           handleLoadVersion({
             canvas_data: latestVersion.canvas_data,
             field_list: latestVersion.field_list,
-            yaml_content: latestVersion.yaml_content,
+            model_json: latestVersion.model_json,
+            model_yml: latestVersion.model_yml,
+            model_view: latestVersion.model_view,
             remark: latestVersion.remark,
             id: latestVersion.id,
             is_published: latestVersion.is_published,
@@ -235,8 +338,6 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
     };
     loadLatestVersion();
   }, [cubeName]);
-
-  const displayedYaml = previewYaml || yamlContent;
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
@@ -313,7 +414,9 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
           cubeName={cubeName}
           canvasData={{ nodes, edges, viewport: viewportRef.current }}
           fieldList={fields}
-          yamlContent={yamlContent}
+          modelJson={modelJson}
+          modelYml={modelYml}
+          modelView={modelView}
           onLoadVersion={handleLoadVersion}
           onPreviewYaml={handlePreviewYaml}
         />
@@ -323,8 +426,11 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
       {showYamlPreview && (
         <YamlPreviewDialog
           open={showYamlPreview}
-          onClose={() => { setShowYamlPreview(false); setPreviewYaml(''); }}
-          yamlContent={displayedYaml}
+          onClose={() => { setShowYamlPreview(false); }}
+          modelJson={modelJson}
+          modelYml={modelYml}
+          modelView={modelView}
+          initialTab={previewTab}
         />
       )}
     </div>

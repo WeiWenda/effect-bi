@@ -11,12 +11,14 @@ interface VersionManageDialogProps {
   cubeName: string;
   canvasData: { nodes: any[]; edges: any[]; viewport?: { x: number; y: number; zoom: number } };
   fieldList: any[];
-  yamlContent: string;
-  onLoadVersion: (version: { canvas_data: any; field_list: any; yaml_content: string; remark: string; id: number; is_published: boolean }) => void;
-  onPreviewYaml: (yaml: string) => void;
+  modelJson: string;
+  modelYml: string;
+  modelView: string;
+  onLoadVersion: (version: { canvas_data: any; field_list: any; model_json: any; model_yml: string; model_view: string; remark: string; id: number; is_published: boolean }) => void;
+  onPreviewYaml: (tab: 'model' | 'view') => void;
 }
 
-export function VersionManageDialog({ open, onClose, cubeName, canvasData, fieldList, yamlContent, onLoadVersion, onPreviewYaml }: VersionManageDialogProps): React.JSX.Element {
+export function VersionManageDialog({ open, onClose, cubeName, canvasData, fieldList, modelJson, modelYml, modelView, onLoadVersion, onPreviewYaml }: VersionManageDialogProps): React.JSX.Element {
   const [versions, setVersions] = useState<CubeVersion[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -40,7 +42,7 @@ export function VersionManageDialog({ open, onClose, cubeName, canvasData, field
   const handleSave = async () => {
     setSaving(true);
     try {
-      await cubeAPI.saveVersion({ name: cubeName, remark: saveRemark || undefined, canvasData: { nodes: canvasData.nodes, edges: canvasData.edges, viewport: canvasData.viewport }, fieldList, yamlContent });
+      await cubeAPI.saveVersion({ name: cubeName, remark: saveRemark || undefined, canvasData: { nodes: canvasData.nodes, edges: canvasData.edges, viewport: canvasData.viewport }, fieldList, modelJson, modelYml, modelView });
       toast('版本保存成功', 'success');
       setSaveRemark(''); setShowSaveInput(false);
       await loadVersions();
@@ -61,12 +63,16 @@ export function VersionManageDialog({ open, onClose, cubeName, canvasData, field
   const handlePreviewYaml = async (id: number) => {
     try {
       const response = await cubeAPI.getVersion(id);
-      onPreviewYaml(response.version.yaml_content);
+      if (response.version.model_view) {
+        onPreviewYaml('view');
+      } else {
+        onPreviewYaml('model');
+      }
     } catch { toast('加载版本详情失败', 'error'); }
   };
 
   const handleRestoreVersion = (version: CubeVersion) => {
-    onLoadVersion({ canvas_data: version.canvas_data, field_list: version.field_list, yaml_content: version.yaml_content, remark: version.remark, id: version.id, is_published: version.is_published });
+    onLoadVersion({ canvas_data: version.canvas_data, field_list: version.field_list, model_json: version.model_json, model_yml: version.model_yml, model_view: version.model_view, remark: version.remark, id: version.id, is_published: version.is_published });
     toast('已恢复至该版本', 'success');
   };
 
