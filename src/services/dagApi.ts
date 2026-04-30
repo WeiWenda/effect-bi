@@ -1,6 +1,6 @@
 import axios, { AxiosResponse } from 'axios';
 
-const DAG_API_BASE_URL = 'http://localhost:3001/api/dag';
+const DAG_API_BASE_URL = 'http://127.0.0.1:3001/api/dag';
 
 export interface DagView {
   id: number;

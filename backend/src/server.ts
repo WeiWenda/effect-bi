@@ -7,6 +7,9 @@ import dagRoutes from './routes/dag.js';
 import fileserverRoutes from './routes/fileserver.js';
 import taskRoutes from './routes/task.js';
 import cubeRoutes from './routes/cube.js';
+import chartRoutes from './routes/chart.js';
+import dashboardRoutes from './routes/dashboard.js';
+import cubeProxyRoutes from './routes/cubeProxy.js';
 
 dotenv.config();
 
@@ -23,6 +26,9 @@ app.use('/api/dag', dagRoutes);
 app.use('/api/file', fileserverRoutes);
 app.use('/api/task', taskRoutes);
 app.use('/api/cube', cubeRoutes);
+app.use('/api/chart', chartRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/cube-proxy', cubeProxyRoutes);
 
 // Health check
 app.get('/health', (req: Request, res: Response) => {

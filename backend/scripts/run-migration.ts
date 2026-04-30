@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { pool } from '../src/config/postgres.ts';
+import { pool } from '../src/config/postgres.js';
 
 dotenv.config();
 
@@ -15,7 +15,13 @@ async function runMigration() {
     'create_dag_views.sql',
     'create_task_instances.sql',
     'create_task_info.sql',
-    'create_cube_versions.sql'
+    'create_cube_versions.sql',
+    'alter_cube_versions_add_model_fields.sql',
+    'alter_task_instances_add_id.sql',
+    'create_charts.sql',
+    'create_dashboard_folders.sql',
+    'create_dashboards.sql',
+    'create_dashboard_charts.sql'
   ];
 
   const client = await pool.connect();

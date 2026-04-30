@@ -37,6 +37,7 @@ export interface TableNodeData extends Record<string, unknown> {
   type: 'table' | 'sql';
   sql?: string;
   sqlFields?: string[];
+  primaryKeys?: string[];
   modelType?: ModelType;
 }
 
@@ -202,6 +203,7 @@ function CubeCanvasContent({ nodes, setNodes, edges, setEdges, onViewportChange,
   const [editingSqlTableName, setEditingSqlTableName] = useState('');
   const [editingSqlContent, setEditingSqlContent] = useState('');
   const [editingSqlFields, setEditingSqlFields] = useState<string[]>([]);
+  const [editingSqlPrimaryKeys, setEditingSqlPrimaryKeys] = useState<string[]>([]);
   const [editingSqlModelType, setEditingSqlModelType] = useState<ModelType>('dim');
 
   const loadFieldsForNode = async (nodeId: string): Promise<{ fields: string[]; tableName: string }> => {
@@ -309,6 +311,7 @@ function CubeCanvasContent({ nodes, setNodes, edges, setEdges, onViewportChange,
             setEditingSqlTableName(data.table || data.label);
             setEditingSqlContent(data.sql || '');
             setEditingSqlFields(data.sqlFields || []);
+            setEditingSqlPrimaryKeys(data.primaryKeys || []);
             setEditingSqlModelType(currentSqlModelType);
             setSqlDialogOpen(true);
           }}
@@ -406,17 +409,18 @@ function CubeCanvasContent({ nodes, setNodes, edges, setEdges, onViewportChange,
       <SqlNodeDialog
         open={sqlDialogOpen}
         onClose={() => { setSqlDialogOpen(false); setEditingSqlNodeId(null); }}
-        onConfirm={({ tableName, sql, sqlFields, modelType }) => {
+        onConfirm={({ tableName, sql, sqlFields, primaryKeys, modelType }) => {
           if (!editingSqlNodeId) return;
           setNodes(nds => nds.map(n => n.id === editingSqlNodeId ? {
             ...n,
-            data: { ...n.data, label: tableName, table: tableName, sql, sqlFields, modelType },
+            data: { ...n.data, label: tableName, table: tableName, sql, sqlFields, primaryKeys, modelType },
           } : n));
           setEditingSqlNodeId(null);
         }}
         initialTableName={editingSqlTableName}
         initialSql={editingSqlContent}
         initialSqlFields={editingSqlFields}
+        initialPrimaryKeys={editingSqlPrimaryKeys}
         initialModelType={editingSqlModelType}
         hasExistingFact={nodes.some(n => n.id !== editingSqlNodeId && n.data.modelType === 'fact')}
         currentModelType={editingSqlModelType}

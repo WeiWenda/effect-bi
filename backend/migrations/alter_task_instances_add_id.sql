@@ -9,6 +9,11 @@ ALTER TABLE task_instances DROP CONSTRAINT IF EXISTS task_instances_pkey;
 -- 3. Set id as the new primary key
 ALTER TABLE task_instances ADD PRIMARY KEY (id);
 
--- 4. Add unique constraint on the former composite key columns
-ALTER TABLE task_instances ADD CONSTRAINT task_instances_task_file_partition_date_attempt_unique
-  UNIQUE (task_file, partition_date, attempt);
+-- 4. Add unique constraint on the former composite key columns (if not exists)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'task_instances_task_file_partition_date_attempt_unique') THEN
+    ALTER TABLE task_instances ADD CONSTRAINT task_instances_task_file_partition_date_attempt_unique
+      UNIQUE (task_file, partition_date, attempt);
+  END IF;
+END $$;

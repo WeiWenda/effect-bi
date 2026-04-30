@@ -13,10 +13,11 @@ import { ModelType } from './CubeCanvas';
 interface SqlNodeDialogProps {
   open: boolean;
   onClose: () => void;
-  onConfirm: (data: { tableName: string; sql: string; sqlFields: string[]; modelType: ModelType }) => void;
+  onConfirm: (data: { tableName: string; sql: string; sqlFields: string[]; primaryKeys: string[]; modelType: ModelType }) => void;
   initialTableName?: string;
   initialSql?: string;
   initialSqlFields?: string[];
+  initialPrimaryKeys?: string[];
   initialModelType?: ModelType;
   hasExistingFact: boolean;
   currentModelType: ModelType;
@@ -29,6 +30,7 @@ export function SqlNodeDialog({
   initialTableName = '',
   initialSql = '',
   initialSqlFields = [],
+  initialPrimaryKeys = [],
   initialModelType = 'dim',
   hasExistingFact,
   currentModelType,
@@ -36,6 +38,7 @@ export function SqlNodeDialog({
   const [tableName, setTableName] = useState(initialTableName);
   const [sql, setSql] = useState(initialSql);
   const [sqlFields, setSqlFields] = useState<string[]>(initialSqlFields);
+  const [primaryKeys, setPrimaryKeys] = useState<string[]>(initialPrimaryKeys);
   const [newField, setNewField] = useState('');
   const [modelType, setModelType] = useState<ModelType>(initialModelType);
 
@@ -44,10 +47,11 @@ export function SqlNodeDialog({
       setTableName(initialTableName);
       setSql(initialSql);
       setSqlFields(initialSqlFields.length > 0 ? [...initialSqlFields] : []);
+      setPrimaryKeys(initialPrimaryKeys.length > 0 ? [...initialPrimaryKeys] : []);
       setNewField('');
       setModelType(initialModelType);
     }
-  }, [open, initialTableName, initialSql, initialSqlFields, initialModelType]);
+  }, [open, initialTableName, initialSql, initialSqlFields, initialPrimaryKeys, initialModelType]);
 
   const addField = () => {
     const trimmed = newField.trim();
@@ -59,11 +63,12 @@ export function SqlNodeDialog({
 
   const removeField = (field: string) => {
     setSqlFields(prev => prev.filter(f => f !== field));
+    setPrimaryKeys(prev => prev.filter(f => f !== field));
   };
 
   const handleConfirm = () => {
     if (tableName.trim() && sql.trim()) {
-      onConfirm({ tableName: tableName.trim(), sql: sql.trim(), sqlFields, modelType });
+      onConfirm({ tableName: tableName.trim(), sql: sql.trim(), sqlFields, primaryKeys, modelType });
       onClose();
     }
   };
@@ -146,7 +151,20 @@ export function SqlNodeDialog({
             {sqlFields.length > 0 && (
               <div className="flex flex-wrap gap-1.5 max-h-32 overflow-auto border border-gray-200 rounded-md p-2 bg-gray-50">
                 {sqlFields.map(field => (
-                  <span key={field} className="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-gray-300 rounded text-xs text-gray-700">
+                  <span key={field} className={`inline-flex items-center gap-1 px-2 py-0.5 border rounded text-xs ${primaryKeys.includes(field) ? 'bg-amber-50 border-amber-300 text-amber-700' : 'bg-white border-gray-300 text-gray-700'}`}>
+                    <input
+                      type="checkbox"
+                      checked={primaryKeys.includes(field)}
+                      onChange={e => {
+                        if (e.target.checked) {
+                          setPrimaryKeys(prev => [...prev, field]);
+                        } else {
+                          setPrimaryKeys(prev => prev.filter(f => f !== field));
+                        }
+                      }}
+                      className="rounded border-gray-300 text-amber-500 focus:ring-amber-500"
+                      title="Primary Key"
+                    />
                     {field}
                     <button
                       type="button"

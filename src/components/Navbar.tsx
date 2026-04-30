@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { MessageSquareIcon, NetworkIcon, ListTodoIcon, BoxIcon, ZapIcon, LogOutIcon, UserIcon } from 'lucide-react';
+import { MessageSquareIcon, NetworkIcon, ListTodoIcon, BoxIcon, ZapIcon, LogOutIcon, UserIcon, BarChart3Icon, LayoutDashboardIcon } from 'lucide-react';
 import { tokenStorage } from '../services/llmApi';
 
 function Navbar(): React.JSX.Element {
@@ -22,6 +22,12 @@ function Navbar(): React.JSX.Element {
     }
     if (path === '/cube') {
       return location.pathname.startsWith('/cube');
+    }
+    if (path === '/query') {
+      return location.pathname.startsWith('/query');
+    }
+    if (path === '/dashboard') {
+      return location.pathname.startsWith('/dashboard');
     }
     if (path === '/etl') {
       return location.pathname.startsWith('/etl');
@@ -75,6 +81,28 @@ function Navbar(): React.JSX.Element {
         >
           <BoxIcon className="size-4" />
           Cube
+        </button>
+        <button
+          onClick={() => navigate('/query')}
+          className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            isActive('/query')
+              ? 'bg-white text-gray-800 shadow-sm'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <BarChart3Icon className="size-4" />
+          查询
+        </button>
+        <button
+          onClick={() => navigate('/dashboard')}
+          className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            isActive('/dashboard')
+              ? 'bg-white text-gray-800 shadow-sm'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <LayoutDashboardIcon className="size-4" />
+          看板
         </button>
         <button
           onClick={() => navigate('/etl')}

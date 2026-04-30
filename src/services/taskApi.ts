@@ -1,6 +1,6 @@
 import axios, { AxiosResponse } from 'axios';
 
-const TASK_API_BASE_URL = 'http://localhost:3001/api/task';
+const TASK_API_BASE_URL = 'http://127.0.0.1:3001/api/task';
 
 export interface TaskInstance {
   task_file: string;

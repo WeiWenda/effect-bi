@@ -1,5 +1,16 @@
 import { Router, Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { pool } from '../config/postgres.js';
+
+const CUBE_HOME = process.env.CUBE_HOME || '';
+
+function deleteYmlFiles(versionId: number) {
+  const cubesFile = path.join(CUBE_HOME, 'cubes', `${versionId}.yml`);
+  const viewsFile = path.join(CUBE_HOME, 'views', `${versionId}.yml`);
+  try { fs.unlinkSync(cubesFile); } catch { /* ignore if not exists */ }
+  try { fs.unlinkSync(viewsFile); } catch { /* ignore if not exists */ }
+}
 
 const router: Router = Router();
 
@@ -70,6 +81,13 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 router.delete('/:name', async (req: Request, res: Response): Promise<void> => {
   try {
     const { name } = req.params;
+
+    // Find published version ids before deleting (to clean up yml files)
+    const publishedResult = await pool.query(
+      'SELECT id FROM cube_versions WHERE name = $1 AND is_published = true',
+      [name]
+    );
+
     const result = await pool.query(
       'DELETE FROM cube_versions WHERE name = $1 RETURNING id',
       [name]
@@ -78,6 +96,14 @@ router.delete('/:name', async (req: Request, res: Response): Promise<void> => {
       res.status(404).json({ error: 'Cube not found' });
       return;
     }
+
+    // Delete yml files for published versions
+    if (CUBE_HOME) {
+      for (const row of publishedResult.rows) {
+        deleteYmlFiles(row.id);
+      }
+    }
+
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting cube:', error);
@@ -182,9 +208,9 @@ router.put('/versions/:id/publish', async (req: Request, res: Response): Promise
 
     await client.query('BEGIN');
 
-    // Get the version to find its name
+    // Get the version to publish
     const versionResult = await client.query(
-      'SELECT name FROM cube_versions WHERE id = $1',
+      'SELECT name, model_yml, model_view FROM cube_versions WHERE id = $1',
       [id]
     );
 
@@ -195,6 +221,14 @@ router.put('/versions/:id/publish', async (req: Request, res: Response): Promise
     }
 
     const cubeName = versionResult.rows[0].name;
+    const modelYml = versionResult.rows[0].model_yml;
+    const modelView = versionResult.rows[0].model_view;
+
+    // Find currently published version to delete its yml files
+    const oldPublished = await client.query(
+      'SELECT id FROM cube_versions WHERE name = $1 AND is_published = true',
+      [cubeName]
+    );
 
     // Unpublish any currently published version for this cube
     await client.query(
@@ -208,6 +242,31 @@ router.put('/versions/:id/publish', async (req: Request, res: Response): Promise
        RETURNING id, name, remark, is_published, canvas_data, field_list, model_json, model_yml, model_view, created_at, updated_at`,
       [id]
     );
+
+    // Delete old published version's yml files, then write new ones
+    if (CUBE_HOME) {
+      try {
+        for (const row of oldPublished.rows) {
+          deleteYmlFiles(row.id);
+        }
+
+        const cubesDir = path.join(CUBE_HOME, 'cubes');
+        const viewsDir = path.join(CUBE_HOME, 'views');
+        fs.mkdirSync(cubesDir, { recursive: true });
+        fs.mkdirSync(viewsDir, { recursive: true });
+
+        const versionId = parseInt(id);
+        if (modelYml) {
+          fs.writeFileSync(path.join(cubesDir, `${versionId}.yml`), modelYml, 'utf8');
+        }
+        if (modelView) {
+          fs.writeFileSync(path.join(viewsDir, `${versionId}.yml`), modelView, 'utf8');
+        }
+        console.log(`Cube published: wrote ${versionId}.yml to CUBE_HOME`);
+      } catch (fileError) {
+        console.error('Error writing yml files to CUBE_HOME:', fileError);
+      }
+    }
 
     await client.query('COMMIT');
     res.json({ version: result.rows[0] });
@@ -228,6 +287,12 @@ router.delete('/versions/:id', async (req: Request, res: Response): Promise<void
   try {
     const { id } = req.params;
 
+    // Check if this version is published (to clean up yml files)
+    const checkResult = await pool.query(
+      'SELECT is_published FROM cube_versions WHERE id = $1',
+      [id]
+    );
+
     const result = await pool.query(
       'DELETE FROM cube_versions WHERE id = $1 RETURNING id',
       [id]
@@ -236,6 +301,11 @@ router.delete('/versions/:id', async (req: Request, res: Response): Promise<void
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Version not found' });
       return;
+    }
+
+    // Delete yml files if the version was published
+    if (CUBE_HOME && checkResult.rows.length > 0 && checkResult.rows[0].is_published) {
+      deleteYmlFiles(parseInt(id));
     }
 
     res.json({ success: true });

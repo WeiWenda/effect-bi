@@ -10,6 +10,7 @@ interface TableNodeInfo {
   type: 'table' | 'sql';
   sql?: string;
   sqlFields?: string[];
+  primaryKeys?: string[];
 }
 
 export type FieldRole = 'measure' | 'dimension';
@@ -57,6 +58,7 @@ export function FieldListPanel({ tableNodes, fields, setFields }: FieldListPanel
           // SQL node: use sqlFields from node data
           if (node.type === 'sql') {
             const sqlFields = node.sqlFields || [];
+            const primaryKeys = new Set(node.primaryKeys || []);
             const columns: FieldItem[] = sqlFields.map((fieldName: string) => ({
               id: `${node.id}-${fieldName}`,
               tableId: node.id,
@@ -68,7 +70,7 @@ export function FieldListPanel({ tableNodes, fields, setFields }: FieldListPanel
               expression: '',
               fieldDescription: '',
               isManual: false,
-              isPrimaryKey: false,
+              isPrimaryKey: primaryKeys.has(fieldName),
             }));
             allFields.push(...columns);
             continue;

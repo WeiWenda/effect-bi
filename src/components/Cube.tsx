@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Node, Edge } from '@xyflow/react';
-import { DatabaseIcon, EyeIcon, HistoryIcon, ChevronLeftIcon } from 'lucide-react';
+import { DatabaseIcon, EyeIcon, HistoryIcon, ChevronLeftIcon, BarChart3Icon } from 'lucide-react';
 import yaml from 'js-yaml';
 import { MetadataTreePanel } from './cube-explore/MetadataTreePanel';
 import { CubeCanvas, TableNodeData, JoinEdgeData } from './cube-explore/CubeCanvas';
@@ -38,6 +39,7 @@ interface CubeDetailPageProps {
 }
 
 export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React.JSX.Element {
+  const navigate = useNavigate();
   const [showYamlPreview, setShowYamlPreview] = useState(false);
   const [showVersionManage, setShowVersionManage] = useState(false);
   const [nodes, setNodes] = useState<Node<TableNodeData>[]>([]);
@@ -65,6 +67,7 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
       type: n.data.type,
       sql: n.data.sql,
       sqlFields: n.data.sqlFields,
+      primaryKeys: n.data.primaryKeys,
     })), [nodes]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -129,15 +132,13 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
   }, []);
 
   // Generate Cube.js Dynamic Data Model: model_json, model_yml, model_view
-  const handleGenerateYaml = useCallback(() => {
+  const generateCubeModel = useCallback((): { modelJson: string; modelYml: string; modelView: string } => {
     if (nodes.length === 0 || fields.filter(f => f.isOutput).length === 0) {
-      setModelJson(JSON.stringify({ error: 'No tables or output fields configured yet' }, null, 2));
-      setModelYml(''); setModelView(''); setPreviewTab('model'); setShowYamlPreview(true); return;
+      return { modelJson: JSON.stringify({ error: 'No tables or output fields configured yet' }, null, 2), modelYml: '', modelView: '' };
     }
     const tableNodes = nodes.filter(n => (n.data.type === 'table' && n.data.catalog && n.data.schema && n.data.table) || (n.data.type === 'sql' && n.data.table));
     if (tableNodes.length === 0) {
-      setModelJson(JSON.stringify({ error: 'No valid table nodes found' }, null, 2));
-      setModelYml(''); setModelView(''); setPreviewTab('model'); setShowYamlPreview(true); return;
+      return { modelJson: JSON.stringify({ error: 'No valid table nodes found' }, null, 2), modelYml: '', modelView: '' };
     }
 
     const outputFields = fields.filter(f => f.isOutput);
@@ -280,15 +281,27 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
     };
     const modelViewStr = yaml.dump(viewDef, { indent: 2, lineWidth: -1, noRefs: true, quotingType: '"' });
 
-    setModelJson(JSON.stringify(cubeModels, null, 2));
-    setModelYml(modelYmlStr);
-    setModelView(modelViewStr);
-    setPreviewTab('model'); setShowYamlPreview(true);
+    return {
+      modelJson: JSON.stringify(cubeModels, null, 2),
+      modelYml: modelYmlStr,
+      modelView: modelViewStr,
+    };
   }, [nodes, edges, fields, cubeName]);
+
+  const handleGenerateYaml = useCallback(() => {
+    const result = generateCubeModel();
+    setModelJson(result.modelJson);
+    setModelYml(result.modelYml);
+    setModelView(result.modelView);
+    setPreviewTab('model'); setShowYamlPreview(true);
+  }, [generateCubeModel]);
 
   // Map database column type -> Cube.js dimension type
   function mapDataTypeToCube(dataType: string): string {
     const lower = dataType.toLowerCase();
+    if (['number', 'string', 'time', 'boolean'].includes(lower)) {
+      return lower;
+    }
     if (lower.includes('int') || lower.includes('decimal') || lower.includes('float') || lower.includes('double') || lower.includes('numeric') || lower.includes('real')) {
       return 'number';
     }
@@ -361,6 +374,13 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => navigate(`/query?cubeName=${encodeURIComponent(cubeName)}`)}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-500 text-white rounded-md text-sm font-medium hover:bg-purple-600 transition-colors"
+          >
+            <BarChart3Icon className="size-4" />
+            可视化查询
+          </button>
+          <button
             onClick={() => setShowVersionManage(true)}
             className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-md text-sm font-medium hover:bg-gray-700 transition-colors"
           >
@@ -414,9 +434,7 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
           cubeName={cubeName}
           canvasData={{ nodes, edges, viewport: viewportRef.current }}
           fieldList={fields}
-          modelJson={modelJson}
-          modelYml={modelYml}
-          modelView={modelView}
+          generateModel={generateCubeModel}
           onLoadVersion={handleLoadVersion}
           onPreviewYaml={handlePreviewYaml}
         />
