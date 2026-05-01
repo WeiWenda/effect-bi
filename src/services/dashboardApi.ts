@@ -3,6 +3,7 @@ import axios, { AxiosResponse } from 'axios';
 const DASHBOARD_API_BASE_URL = 'http://127.0.0.1:3001/api/dashboard';
 
 import type { DashboardFolder, DashboardInfo, FilterConfig, DashboardLayoutItem, ChartConfig } from '../types/chart';
+import { normalizeDrilldownConfigForClient } from '../utils/drilldownConfig';
 
 // ─── Folder APIs ───
 
@@ -71,10 +72,15 @@ export const dashboardAPI = {
     return response.data.dashboards.map(toDashboardInfo);
   },
 
-  create: async (name: string, folderId?: number | null): Promise<DashboardInfo> => {
+  create: async (
+    name: string,
+    folderId?: number | null,
+    extra?: { layout?: DashboardLayoutItem[] }
+  ): Promise<DashboardInfo> => {
     const response: AxiosResponse<{ dashboard: DashboardRow }> = await axios.post(DASHBOARD_API_BASE_URL, {
       name,
       folderId: folderId || null,
+      ...(extra?.layout !== undefined ? { layout: extra.layout } : {}),
     });
     return toDashboardInfo(response.data.dashboard);
   },
@@ -92,7 +98,15 @@ export const dashboardAPI = {
       metrics: typeof c.metrics === 'string' ? JSON.parse(c.metrics) : c.metrics || [],
       filters: typeof c.filters === 'string' ? JSON.parse(c.filters) : c.filters || [],
       dynamicFilters: typeof c.dynamic_filters === 'string' ? JSON.parse(c.dynamic_filters) : c.dynamic_filters || [],
-      drilldownConfig: typeof c.drilldown_config === 'string' ? JSON.parse(c.drilldown_config) : c.drilldown_config,
+      drilldownConfig: normalizeDrilldownConfigForClient(
+        typeof c.drilldown_config === 'string' ? JSON.parse(c.drilldown_config) : c.drilldown_config
+      ),
+      rtfTextConfig:
+        c.rtf_text_config == null
+          ? undefined
+          : typeof c.rtf_text_config === 'string'
+            ? JSON.parse(c.rtf_text_config)
+            : c.rtf_text_config,
       sort: typeof c.sort === 'string' ? JSON.parse(c.sort) : c.sort || [],
       limit: c.limit || 500,
       createdAt: c.created_at,

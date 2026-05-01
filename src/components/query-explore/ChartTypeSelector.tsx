@@ -1,4 +1,13 @@
-import { TableIcon, LineChartIcon, PieChartIcon, HashIcon, BarChart3Icon, FunnelIcon, MapIcon } from 'lucide-react';
+import {
+  TableIcon,
+  LineChartIcon,
+  PieChartIcon,
+  HashIcon,
+  BarChart3Icon,
+  FunnelIcon,
+  MapIcon,
+  ScrollTextIcon,
+} from 'lucide-react';
 import type { ChartType } from '../../types/chart';
 
 interface ChartTypeSelectorProps {
@@ -14,6 +23,7 @@ const CHART_TYPES: { type: ChartType; label: string; icon: React.ReactNode }[] =
   { type: 'funnel', label: '漏斗图', icon: <FunnelIcon className="size-4" /> },
   { type: 'map', label: '地图', icon: <MapIcon className="size-4" /> },
   { type: 'number', label: '数字', icon: <HashIcon className="size-4" /> },
+  { type: 'rtf-text', label: '文本', icon: <ScrollTextIcon className="size-4" /> },
 ];
 
 export function ChartTypeSelector({ value, onChange }: ChartTypeSelectorProps): React.JSX.Element {

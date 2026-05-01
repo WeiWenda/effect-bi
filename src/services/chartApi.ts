@@ -2,7 +2,8 @@ import axios, { AxiosResponse } from 'axios';
 
 const CHART_API_BASE_URL = 'http://127.0.0.1:3001/api/chart';
 
-import type { ChartConfig } from '../types/chart';
+import type { ChartConfig, RtfTextChartConfig } from '../types/chart';
+import { normalizeDrilldownConfigForClient } from '../utils/drilldownConfig';
 
 export interface ChartResponse {
   chart: ChartConfig & {
@@ -24,7 +25,15 @@ function toChartConfig(row: any): ChartConfig {
     metrics: typeof row.metrics === 'string' ? JSON.parse(row.metrics) : row.metrics || [],
     filters: typeof row.filters === 'string' ? JSON.parse(row.filters) : row.filters || [],
     dynamicFilters: typeof row.dynamic_filters === 'string' ? JSON.parse(row.dynamic_filters) : row.dynamic_filters || [],
-    drilldownConfig: typeof row.drilldown_config === 'string' ? JSON.parse(row.drilldown_config) : row.drilldown_config,
+    drilldownConfig: normalizeDrilldownConfigForClient(
+      typeof row.drilldown_config === 'string' ? JSON.parse(row.drilldown_config) : row.drilldown_config
+    ),
+    rtfTextConfig:
+      row.rtf_text_config == null
+        ? undefined
+        : typeof row.rtf_text_config === 'string'
+          ? JSON.parse(row.rtf_text_config)
+          : row.rtf_text_config,
     sort: typeof row.sort === 'string' ? JSON.parse(row.sort) : row.sort || [],
     limit: row.limit || 500,
     createdAt: row.created_at,
@@ -33,7 +42,7 @@ function toChartConfig(row: any): ChartConfig {
 }
 
 function toApiBody(config: Partial<ChartConfig>) {
-  return {
+  const body: Record<string, unknown> = {
     name: config.name,
     viewName: config.viewName,
     chartType: config.chartType,
@@ -45,6 +54,10 @@ function toApiBody(config: Partial<ChartConfig>) {
     sort: config.sort || [],
     limit: config.limit,
   };
+  if (config.rtfTextConfig !== undefined) {
+    body.rtfTextConfig = config.rtfTextConfig as RtfTextChartConfig | undefined;
+  }
+  return body;
 }
 
 export const chartAPI = {

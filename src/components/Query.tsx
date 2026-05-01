@@ -1,7 +1,7 @@
-import { VisualQueryPage } from './query-explore/VisualQueryPage';
+import { VisualQueryWorkspace } from './query-explore/VisualQueryWorkspace';
 
 function Query(): React.JSX.Element {
-  return <VisualQueryPage />;
+  return <VisualQueryWorkspace variant="page" />;
 }
 
 export default Query;

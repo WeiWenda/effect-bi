@@ -2,7 +2,8 @@ import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
-import type { ChartType } from '../../types/chart';
+import type { ChartType, MetricConfig, RtfTextChartConfig } from '../../types/chart';
+import { interpolateMetricTemplate, buildMinimalRtfParagraph } from '../../utils/rtfTextInterpolation';
 
 const COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
@@ -11,6 +12,8 @@ interface ChartRendererProps {
   data: any[];
   dimensions: { field: string; title?: string }[];
   metrics: { field: string; title?: string }[];
+  /** chartType 为 rtf-text 时使用 */
+  rtfTextConfig?: RtfTextChartConfig;
 }
 
 function TableRenderer({ data, dimensions, metrics }: Omit<ChartRendererProps, 'chartType'>): React.JSX.Element {
@@ -138,6 +141,53 @@ function PieChartRenderer({ data, dimensions, metrics }: Omit<ChartRendererProps
   );
 }
 
+function RtfTextRenderer({
+  data,
+  metrics,
+  rtfTextConfig,
+}: {
+  data: any[];
+  metrics: MetricConfig[];
+  rtfTextConfig?: RtfTextChartConfig;
+}): React.JSX.Element {
+  const cfg: RtfTextChartConfig = rtfTextConfig ?? {
+    interpolationExpression: '',
+    fontSizePx: 16,
+    color: '#111827',
+    fontFamily: 'system-ui, sans-serif',
+  };
+
+  if (data.length === 0) {
+    return <div className="text-sm text-gray-400 text-center py-8">无数据</div>;
+  }
+
+  const row = (data[0] ?? {}) as Record<string, unknown>;
+  const display = interpolateMetricTemplate(cfg.interpolationExpression, row);
+  const rtf = buildMinimalRtfParagraph(display, cfg);
+
+  return (
+    <div className="flex h-full flex-col gap-3 overflow-auto p-2">
+      <div
+        className="rounded-lg border border-amber-100 bg-amber-50/30 p-4 leading-relaxed shadow-sm"
+        style={{
+          fontSize: `${cfg.fontSizePx}px`,
+          color: cfg.color,
+          fontFamily: cfg.fontFamily,
+          whiteSpace: 'pre-wrap',
+        }}
+      >
+        {display || <span className="text-gray-400">（模板为空）</span>}
+      </div>
+      <details className="text-xs text-gray-500">
+        <summary className="cursor-pointer select-none text-amber-800/80 hover:text-amber-900">查看 / 复制 RTF 片段</summary>
+        <pre className="mt-2 max-h-40 overflow-auto rounded border border-gray-200 bg-gray-50 p-2 font-mono text-[10px] leading-snug text-gray-700">
+          {rtf}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
 function NumberRenderer({ data, metrics }: { data: any[]; metrics: { field: string; title?: string }[] }): React.JSX.Element {
   if (data.length === 0 || metrics.length === 0) {
     return <div className="text-sm text-gray-400 text-center py-8">无数据</div>;
@@ -155,7 +205,13 @@ function NumberRenderer({ data, metrics }: { data: any[]; metrics: { field: stri
   );
 }
 
-export function ChartRenderer({ chartType, data, dimensions, metrics }: ChartRendererProps): React.JSX.Element {
+export function ChartRenderer({
+  chartType,
+  data,
+  dimensions,
+  metrics,
+  rtfTextConfig,
+}: ChartRendererProps): React.JSX.Element {
   switch (chartType) {
     case 'table':
       return <TableRenderer data={data} dimensions={dimensions} metrics={metrics} />;
@@ -167,6 +223,8 @@ export function ChartRenderer({ chartType, data, dimensions, metrics }: ChartRen
       return <PieChartRenderer data={data} dimensions={dimensions} metrics={metrics} />;
     case 'number':
       return <NumberRenderer data={data} metrics={metrics} />;
+    case 'rtf-text':
+      return <RtfTextRenderer data={data} metrics={metrics as MetricConfig[]} rtfTextConfig={rtfTextConfig} />;
     default:
       return <div className="text-sm text-gray-400 text-center py-8">不支持的图表类型</div>;
   }

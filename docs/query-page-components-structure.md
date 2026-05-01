@@ -2,7 +2,7 @@
 
 ## 概述
 
-查询页面 (`VisualQueryPage`) 是一个复杂的三栏布局页面，用于可视化数据查询和图表配置。本文档详细说明各个区域、组件及其关系。
+查询路由 `Query` 直接渲染 `VisualQueryWorkspace`（`variant="page"`），构成三栏布局的可视化查询与图表配置页。本文档说明各区域、组件及其关系。
 
 ## 页面整体布局
 
@@ -16,9 +16,9 @@
 │ ViewSelector  │ ChartTypeSelector   │ ChartDynamicControls (运行时控件)        │
 │               │ DimensionDropZone    │                                       │
 │               │ MetricDropZone      │ ChartRenderer (图表渲染)               │
-│               │ FilterConfigPanel   │                                       │
-│               │ DynamicFilterConfig │                                       │
-│               │ DrilldownConfig     │                                       │
+│               │ StaticFilterConfigZone │                                    │
+│               │ DynamicFilterConfigZone │                                   │
+│               │ DynamicDrilldownConfigZone │                                │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -64,12 +64,14 @@
 - **状态管理**: 管理 `metrics` 数组
 - **特性**: 支持拖拽排序、删除、聚合方式设置
 
-##### 3.4 FilterConfigPanel (静态过滤器配置面板)
+##### 3.4 StaticFilterConfigZone (静态过滤器配置区)
+- **位置**: `src/components/query-explore/StaticFilterConfigZone.tsx`
 - **功能**: 配置静态查询过滤器
 - **状态管理**: 管理 `filters` 数组
 - **特性**: 支持多种操作符、值输入、AND/OR 逻辑
 
-##### 3.5 DynamicFilterConfigSection (动态过滤器配置区域)
+##### 3.5 DynamicFilterConfigZone (动态过滤器配置区)
+- **位置**: `src/components/query-explore/DynamicFilterConfigZone.tsx`
 - **功能**: 配置运行时可动态修改的过滤器
 - **状态管理**: 管理 `dynamicFilters` 配置
 - **特性**: 
@@ -78,7 +80,8 @@
   - 默认值设置
   - 可配置为必填或可选
 
-##### 3.6 DrilldownConfigSection (动态维度下钻配置区域)
+##### 3.6 DynamicDrilldownConfigZone (动态维度下钻配置区)
+- **位置**: `src/components/query-explore/DynamicDrilldownConfigZone.tsx`
 - **功能**: 配置运行时可动态选择的下钻维度
 - **状态管理**: 管理 `drilldownConfig` 配置
 - **特性**:
@@ -123,18 +126,18 @@ DimensionDropZone → dimensions → ChartRenderer (影响图表渲染)
                     ↓
 MetricDropZone → metrics → ChartRenderer (影响图表渲染)
                     ↓
-FilterConfigPanel → filters → buildCubeQuery → 查询数据
+StaticFilterConfigZone → filters → buildCubeQuery → 查询数据
                     ↓
-DynamicFilterConfigSection → dynamicFilters → ChartDynamicControls
+DynamicFilterConfigZone → dynamicFilters → ChartDynamicControls
                     ↓
-DrilldownConfigSection → drilldownConfig → ChartDynamicControls
+DynamicDrilldownConfigZone → drilldownConfig → ChartDynamicControls
                     ↓
 ChartDynamicControls → dynamicFilterValues/selectedDrilldownDimensions → 重新查询
 ```
 
 ### 关键状态管理
 
-#### VisualQueryPage 主状态:
+#### VisualQueryWorkspace（page）主状态:
 - `selectedView`: 当前选中的数据视图
 - `selectedCube`: 当前视图的元数据
 - `chartType`: 图表类型
@@ -176,13 +179,13 @@ ChartDynamicControls → dynamicFilterValues/selectedDrilldownDimensions → 重
 ### 1. 基础查询流程
 1. 用户在 ViewSelectorPanel 选择数据视图
 2. 从 DimensionDropZone 和 MetricDropZone 拖拽字段
-3. 在 FilterConfigPanel 配置静态过滤器
+3. 在 StaticFilterConfigZone 配置静态过滤器
 4. 点击"运行查询"执行查询
 5. ChartRenderer 显示查询结果
 
 ### 2. 动态控件流程
-1. 在 DynamicFilterConfigSection 配置动态过滤器
-2. 在 DrilldownConfigSection 配置下钻维度
+1. 在 DynamicFilterConfigZone 配置动态过滤器
+2. 在 DynamicDrilldownConfigZone 配置下钻维度
 3. 运行查询后，ChartDynamicControls 显示交互控件
 4. 用户修改动态控件值，实时更新图表
 
@@ -227,7 +230,7 @@ ChartDynamicControls → dynamicFilterValues/selectedDrilldownDimensions → 重
 3. 调整字段类型映射
 
 ### 新增交互控件
-1. 在 DynamicFilterConfigSection 添加新控件类型
+1. 在 DynamicFilterConfigZone 添加新控件类型
 2. 在 ChartDynamicControls 添加运行时渲染
 3. 更新数据类型处理逻辑
 

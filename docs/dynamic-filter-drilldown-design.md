@@ -61,8 +61,8 @@ export interface ChartConfig {
 
 ## 3. 组件设计
 
-### 3.1 FilterConfigPanel 扩展
-位置：`src/components/query-explore/FilterConfigPanel.tsx`
+### 3.1 StaticFilterConfigZone 扩展
+位置：`src/components/query-explore/StaticFilterConfigZone.tsx`
 
 - 在添加/编辑过滤弹窗中增加"动态过滤"勾选框
 - 勾选动态过滤后，过滤条件标记为 `isDynamic: true`
@@ -104,7 +104,7 @@ interface ChartDynamicControlsProps {
 
 ## 4. 数据流设计
 
-### 4.1 VisualQueryPage 状态扩展
+### 4.1 VisualQueryWorkspace（page）状态扩展
 
 ```typescript
 // 新增状态
@@ -213,10 +213,10 @@ ALTER TABLE charts ADD COLUMN drilldown_config JSONB DEFAULT NULL;
 ### Phase 1: 基础类型与组件
 1. 扩展 `src/types/chart.ts` 类型定义
 2. 创建 `ChartDynamicControls` 组件
-3. 扩展 `FilterConfigPanel` 支持动态过滤勾选
+3. 扩展 `StaticFilterConfigZone` 支持动态过滤勾选
 
 ### Phase 2: 数据流整合
-1. 扩展 `VisualQueryPage` 状态管理
+1. 扩展 `VisualQueryWorkspace`（`variant="page"`）状态管理
 2. 修改 `buildCubeQuery` 支持动态过滤和下钻
 3. 扩展 `ChartRenderer` 支持下钻维度
 

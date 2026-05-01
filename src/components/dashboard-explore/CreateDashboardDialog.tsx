@@ -4,6 +4,7 @@ import { Button } from '../ui/button';
 import { Select } from '../ui/select';
 import { dashboardAPI, folderAPI } from '../../services/dashboardApi';
 import type { DashboardInfo, DashboardFolder } from '../../types/chart';
+import { makeDefaultTabGroupLayoutItem } from '../../utils/dashboardTabOnlyLayout';
 
 interface CreateDashboardDialogProps {
   open: boolean;
@@ -29,7 +30,9 @@ export function CreateDashboardDialog({ open, onClose, onCreated }: CreateDashbo
     if (!name.trim()) return;
     setCreating(true);
     try {
-      const dash = await dashboardAPI.create(name.trim(), folderId);
+      const dash = await dashboardAPI.create(name.trim(), folderId, {
+        layout: [makeDefaultTabGroupLayoutItem(0)],
+      });
       onCreated(dash);
     } catch {
       // error handling is up to caller

@@ -9,7 +9,19 @@ const router: Router = Router();
  */
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, viewName, chartType, dimensions, metrics, filters, dynamicFilters, drilldownConfig, sort, limit } = req.body;
+    const {
+      name,
+      viewName,
+      chartType,
+      dimensions,
+      metrics,
+      filters,
+      dynamicFilters,
+      drilldownConfig,
+      sort,
+      limit,
+      rtfTextConfig,
+    } = req.body;
 
     if (!viewName) {
       res.status(400).json({ error: 'viewName is required' });
@@ -17,8 +29,8 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     }
 
     const result = await pool.query(
-      `INSERT INTO charts (name, view_name, chart_type, dimensions, metrics, filters, dynamic_filters, drilldown_config, sort, "limit")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO charts (name, view_name, chart_type, dimensions, metrics, filters, dynamic_filters, drilldown_config, sort, "limit", rtf_text_config)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         name || '未命名图表',
@@ -31,6 +43,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
         drilldownConfig ? JSON.stringify(drilldownConfig) : null,
         JSON.stringify(sort || []),
         limit || 500,
+        rtfTextConfig ? JSON.stringify(rtfTextConfig) : null,
       ]
     );
 
@@ -69,7 +82,19 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 router.put('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { name, viewName, chartType, dimensions, metrics, filters, dynamicFilters, drilldownConfig, sort, limit } = req.body;
+    const {
+      name,
+      viewName,
+      chartType,
+      dimensions,
+      metrics,
+      filters,
+      dynamicFilters,
+      drilldownConfig,
+      sort,
+      limit,
+      rtfTextConfig,
+    } = req.body;
 
     const existing = await pool.query('SELECT * FROM charts WHERE id = $1', [id]);
     if (existing.rows.length === 0) {
@@ -88,8 +113,9 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
         dynamic_filters = COALESCE($7, dynamic_filters),
         drilldown_config = COALESCE($8, drilldown_config),
         sort = COALESCE($9, sort),
-        "limit" = COALESCE($10, "limit")
-       WHERE id = $11
+        "limit" = COALESCE($10, "limit"),
+        rtf_text_config = COALESCE($11::jsonb, rtf_text_config)
+       WHERE id = $12
        RETURNING *`,
       [
         name || null,
@@ -102,6 +128,7 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
         drilldownConfig !== undefined ? (drilldownConfig ? JSON.stringify(drilldownConfig) : null) : null,
         sort !== undefined ? JSON.stringify(sort) : null,
         limit !== undefined ? limit : null,
+        rtfTextConfig !== undefined ? JSON.stringify(rtfTextConfig) : null,
         id,
       ]
     );

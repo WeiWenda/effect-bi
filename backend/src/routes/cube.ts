@@ -75,6 +75,70 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 });
 
 /**
+ * Copy a cube (all versions) to a new name; copied versions are never published.
+ * POST /api/cube/:name/copy
+ * Body: { targetName: string }
+ */
+router.post('/:name/copy', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const nameParam = req.params.name;
+    const sourceName = Array.isArray(nameParam) ? nameParam[0] ?? '' : (nameParam ?? '');
+    if (!sourceName) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    const { targetName } = req.body;
+
+    if (!targetName || typeof targetName !== 'string' || !targetName.trim()) {
+      res.status(400).json({ error: 'targetName is required' });
+      return;
+    }
+
+    const trimmedTarget = targetName.trim();
+    if (trimmedTarget === sourceName) {
+      res.status(400).json({ error: 'targetName must differ from source name' });
+      return;
+    }
+
+    const sourceVersions = await pool.query(
+      'SELECT 1 FROM cube_versions WHERE name = $1 LIMIT 1',
+      [sourceName]
+    );
+    if (sourceVersions.rows.length === 0) {
+      res.status(404).json({ error: 'Cube not found' });
+      return;
+    }
+
+    const targetExists = await pool.query(
+      'SELECT 1 FROM cube_versions WHERE name = $1 LIMIT 1',
+      [trimmedTarget]
+    );
+    if (targetExists.rows.length > 0) {
+      res.status(409).json({ error: 'Cube name already exists' });
+      return;
+    }
+
+    const insertResult = await pool.query(
+      `INSERT INTO cube_versions (name, remark, is_published, canvas_data, field_list, model_json, model_yml, model_view)
+       SELECT $1, remark, false, canvas_data, field_list, model_json, model_yml, model_view
+       FROM cube_versions
+       WHERE name = $2
+       ORDER BY id ASC
+       RETURNING id`,
+      [trimmedTarget, sourceName]
+    );
+
+    res.status(201).json({
+      name: trimmedTarget,
+      version_count: insertResult.rows.length,
+    });
+  } catch (error) {
+    console.error('Error copying cube:', error);
+    res.status(500).json({ error: 'Failed to copy cube' });
+  }
+});
+
+/**
  * Delete a cube (all versions with the given name)
  * DELETE /api/cube/:name
  */
@@ -204,7 +268,8 @@ router.post('/versions', async (req: Request, res: Response): Promise<void> => {
 router.put('/versions/:id/publish', async (req: Request, res: Response): Promise<void> => {
   const client = await pool.connect();
   try {
-    const { id } = req.params;
+    const idRaw = req.params.id;
+    const id = Array.isArray(idRaw) ? idRaw[0] : idRaw;
 
     await client.query('BEGIN');
 
@@ -255,7 +320,7 @@ router.put('/versions/:id/publish', async (req: Request, res: Response): Promise
         fs.mkdirSync(cubesDir, { recursive: true });
         fs.mkdirSync(viewsDir, { recursive: true });
 
-        const versionId = parseInt(id);
+        const versionId = parseInt(String(id), 10);
         if (modelYml) {
           fs.writeFileSync(path.join(cubesDir, `${versionId}.yml`), modelYml, 'utf8');
         }
@@ -285,7 +350,8 @@ router.put('/versions/:id/publish', async (req: Request, res: Response): Promise
  */
 router.delete('/versions/:id', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const idRaw = req.params.id;
+    const id = Array.isArray(idRaw) ? idRaw[0] : idRaw;
 
     // Check if this version is published (to clean up yml files)
     const checkResult = await pool.query(
@@ -305,7 +371,7 @@ router.delete('/versions/:id', async (req: Request, res: Response): Promise<void
 
     // Delete yml files if the version was published
     if (CUBE_HOME && checkResult.rows.length > 0 && checkResult.rows[0].is_published) {
-      deleteYmlFiles(parseInt(id));
+      deleteYmlFiles(parseInt(String(id), 10));
     }
 
     res.json({ success: true });

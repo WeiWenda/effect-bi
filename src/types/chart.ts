@@ -1,4 +1,4 @@
-export type ChartType = 'table' | 'line' | 'pie' | 'number' | 'bar' | 'funnel' | 'map';
+export type ChartType = 'table' | 'line' | 'pie' | 'number' | 'bar' | 'funnel' | 'map' | 'rtf-text';
 
 export type TimeGranularity = 'year' | 'quarter' | 'month' | 'week' | 'day' | 'hour' | 'minute';
 
@@ -20,6 +20,27 @@ export type FilterOperator =
   | 'inDateRange'
   | 'notInDateRange';
 
+/** 时间范围筛选：相对「查询时刻」 */
+export type TimeRelativeUnit = 'days' | 'weeks' | 'months' | 'quarters' | 'years';
+
+export interface TimeRelativeRange {
+  amount: number;
+  unit: TimeRelativeUnit;
+}
+
+/** 时间范围的一端：绝对 yyyy-MM-dd，或相对「查询时刻」往前 */
+export interface TimeRangeBound {
+  kind: 'absolute' | 'relative';
+  date?: string;
+  relativeAmount?: number;
+  relativeUnit?: TimeRelativeUnit;
+}
+
+export interface TimeRangeSpec {
+  start: TimeRangeBound;
+  end: TimeRangeBound;
+}
+
 export interface DimensionConfig {
   field: string;
   title?: string;
@@ -35,6 +56,12 @@ export interface MetricConfig {
   isDimensionAsMetric?: boolean;
 }
 
+/** 看板筛选器：指定该条件对某张图表使用的 Cube 成员名（通常为维度 field） */
+export interface DashboardFilterChartBinding {
+  chartId: number;
+  field: string;
+}
+
 export interface FilterConfig {
   field: string;
   title?: string;
@@ -43,6 +70,14 @@ export interface FilterConfig {
   operator: FilterOperator;
   values: any[];
   isDynamic?: boolean; // 标记是否为动态过滤器
+  /** 看板级：按图表显式绑定；有内容时仅对列出的图表生效，且查询使用该行的 field */
+  chartBindings?: DashboardFilterChartBinding[];
+  /** 看板级：列表展示名（编辑弹窗必填） */
+  displayName?: string;
+  /** @deprecated 仅兼容旧数据；新逻辑使用 timeRange */
+  timeRelative?: TimeRelativeRange;
+  /** 时间范围：起止可各自为绝对/相对；发查询前展开为 values */
+  timeRange?: TimeRangeSpec;
 }
 
 // 动态过滤配置（设计时配置，不包含运行时值）
@@ -53,6 +88,8 @@ export interface DynamicFilterConfig {
   type?: string;
   operator: FilterOperator;
   defaultValues?: any[]; // 默认值
+  /** 图表上方动态过滤条展示名（配置弹窗必填） */
+  displayName?: string;
 }
 
 // 动态维度下钻配置
@@ -71,6 +108,15 @@ export interface SortConfig {
   direction: 'asc' | 'desc';
 }
 
+/** 文本图（RTF）：仅多指标、无维度；用占位符将指标值拼成一段 RTF */
+export interface RtfTextChartConfig {
+  /** 插值模板，占位符为 `{指标字段名}`，与 Cube 返回列名一致 */
+  interpolationExpression: string;
+  fontSizePx: number;
+  color: string;
+  fontFamily: string;
+}
+
 export interface ChartConfig {
   id?: number;
   name: string;
@@ -81,6 +127,8 @@ export interface ChartConfig {
   filters: FilterConfig[];
   dynamicFilters?: DynamicFilterConfig[]; // 动态过滤器配置
   drilldownConfig?: DynamicDrilldownConfig; // 动态维度下钻配置
+  /** chartType 为 rtf-text 时使用 */
+  rtfTextConfig?: RtfTextChartConfig;
   sort: SortConfig[];
   limit: number;
   createdAt?: string;
@@ -172,10 +220,15 @@ export interface DashboardLayoutItem {
   h: number;
   minW?: number;
   minH?: number;
+  maxW?: number;
   widgetType?: DashboardWidgetType;
   markdownContent?: string;
   tabGroupTabs?: TabGroupTab[];
   activeTabId?: string;
+  /** 内置默认标签组（id 一般为 default-tab-group），Pin 图表优先进入 */
+  isDefaultTabGroup?: boolean;
+  /** 标签组通栏标题；预览时未设置、空白或与「默认标签组」「标签组 N」等占位文案相同时不显示标题栏，编辑模式仍显示默认「标签组」 */
+  tabGroupTitle?: string;
   // 图表归属关系: "tabGroupId:tabId" 表示归属于某个标签组的某个标签
   belongsTo?: string;
 }

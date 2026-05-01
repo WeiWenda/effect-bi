@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { DatabaseIcon, PlusIcon, Trash2Icon, ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
+import { DatabaseIcon, PlusIcon, Trash2Icon, CopyIcon, ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
 import { cubeAPI, CubeInfo } from '../../services/cubeApi';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Button } from '../ui/button';
@@ -21,6 +21,11 @@ export function CubeListPage(): React.JSX.Element {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [cubeToDelete, setCubeToDelete] = useState<CubeInfo | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+  const [cubeToCopy, setCubeToCopy] = useState<CubeInfo | null>(null);
+  const [copyTargetName, setCopyTargetName] = useState('');
+  const [copying, setCopying] = useState(false);
 
   useEffect(() => {
     fetchCubes();
@@ -58,6 +63,43 @@ export function CubeListPage(): React.JSX.Element {
       }
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleCopyClick = (cube: CubeInfo) => {
+    setCubeToCopy(cube);
+    setCopyTargetName(`${cube.name}_copy`);
+    setCopyDialogOpen(true);
+  };
+
+  const handleCopyConfirm = async () => {
+    if (!cubeToCopy) return;
+    const target = copyTargetName.trim();
+    if (!target) {
+      toast('请输入新 Cube 名称', 'error');
+      return;
+    }
+    setCopying(true);
+    try {
+      await cubeAPI.copyCube(cubeToCopy.name, target);
+      toast('复制成功', 'success');
+      setCopyDialogOpen(false);
+      setCubeToCopy(null);
+      setCopyTargetName('');
+      await fetchCubes();
+      navigate(`/cube/${encodeURIComponent(target)}`);
+    } catch (err: any) {
+      if (err?.response?.data?.error === 'Cube name already exists') {
+        toast('新名称已存在', 'error');
+      } else if (err?.response?.data?.error === 'targetName must differ from source name') {
+        toast('新名称须与原名称不同', 'error');
+      } else if (err?.response?.status === 404) {
+        toast('源 Cube 不存在', 'error');
+      } else {
+        toast('复制失败', 'error');
+      }
+    } finally {
+      setCopying(false);
     }
   };
 
@@ -160,13 +202,24 @@ export function CubeListPage(): React.JSX.Element {
                       {new Date(cube.updated_at).toLocaleString('zh-CN')}
                     </td>
                     <td className="px-6 py-4 text-sm">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDeleteClick(cube); }}
-                        className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-600 transition-colors"
-                        title="删除"
-                      >
-                        <Trash2Icon className="size-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleCopyClick(cube); }}
+                          className="p-1.5 hover:bg-blue-50 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"
+                          title="复制"
+                        >
+                          <CopyIcon className="size-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleDeleteClick(cube); }}
+                          className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-600 transition-colors"
+                          title="删除"
+                        >
+                          <Trash2Icon className="size-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -220,6 +273,42 @@ export function CubeListPage(): React.JSX.Element {
             <Button variant="outline" onClick={() => { setCreateDialogOpen(false); setNewCubeName(''); }}>取消</Button>
             <Button onClick={handleCreate} disabled={creating || !newCubeName.trim()}>
               {creating ? '创建中...' : '创建'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Copy Cube Dialog */}
+      <Dialog open={copyDialogOpen} onOpenChange={(open) => {
+        setCopyDialogOpen(open);
+        if (!open) {
+          setCubeToCopy(null);
+          setCopyTargetName('');
+        }
+      }}
+      >
+        <DialogContent>
+          <DialogHeader><DialogTitle>复制 Cube</DialogTitle></DialogHeader>
+          <div className="py-4 space-y-3">
+            <p className="text-sm text-gray-600">
+              将 <span className="font-medium text-gray-800">{cubeToCopy?.name}</span> 的所有版本复制为新 Cube；副本中的版本均为未发布状态。
+            </p>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">新 Cube 名称</label>
+              <input
+                type="text"
+                value={copyTargetName}
+                onChange={e => setCopyTargetName(e.target.value)}
+                placeholder="请输入新名称"
+                className="w-full text-sm border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                onKeyDown={e => { if (e.key === 'Enter') handleCopyConfirm(); }}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCopyDialogOpen(false); setCubeToCopy(null); setCopyTargetName(''); }}>取消</Button>
+            <Button onClick={handleCopyConfirm} disabled={copying || !copyTargetName.trim()}>
+              {copying ? '复制中...' : '复制'}
             </Button>
           </DialogFooter>
         </DialogContent>

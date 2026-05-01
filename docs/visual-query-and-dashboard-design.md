@@ -49,8 +49,8 @@
 
 | 路由 | 页面 | 说明 |
 |------|------|------|
-| `/query` | VisualQueryPage | 可视化查询主页面 |
-| `/query?chartId=123` | VisualQueryPage | 从看板跳入编辑模式，加载已有图表配置 |
+| `/query` | `Query` → `VisualQueryWorkspace`（page） | 可视化查询主页面 |
+| `/query?chartId=123` | 同上 | 从看板跳入编辑模式，加载已有图表配置 |
 | `/dashboard` | DashboardListPage | 看板文件夹列表 |
 | `/dashboard/:id` | DashboardDetailPage | 看板详情（网格布局 + 筛选器） |
 
@@ -268,7 +268,7 @@ CUBE_API_TOKEN=your_cube_api_token
 
 ## 6. 前端设计
 
-### 6.1 可视化查询页面 — VisualQueryPage
+### 6.1 可视化查询页面 — VisualQueryWorkspace（page）
 
 **布局** (参考 Superset Chart Editor)：
 
@@ -505,7 +505,7 @@ function buildCubeQuery(config: ChartConfig): CubeQuery {
 src/
 ├── components/
 │   ├── query-explore/                    # 可视化查询
-│   │   ├── VisualQueryPage.tsx           # 主页面 (左中右布局)
+│   │   ├── VisualQueryWorkspace.tsx      # 主工作区 page / embed
 │   │   ├── ViewSelectorPanel.tsx         # 左面板：View列表 + 维度/指标
 │   │   ├── ChartConfigPanel.tsx          # 中间：图表配置区
 │   │   ├── ChartPreviewPanel.tsx         # 右侧：图表预览渲染
@@ -574,7 +574,7 @@ backend/
 9. 实现 ChartConfigPanel (中间面板整合)
 10. 实现 chartRenderers (5 种图表渲染器)
 11. 实现 ChartPreviewPanel (右侧面板)
-12. 实现 VisualQueryPage (三栏布局整合)
+12. 实现 VisualQueryWorkspace 三栏布局（`Query` 路由 `variant="page"`）
 13. 实现 PinToDashboardDialog
 14. 实现查询转换逻辑 (ChartConfig → CubeQuery)
 

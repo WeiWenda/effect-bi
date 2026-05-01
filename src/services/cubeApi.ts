@@ -49,6 +49,11 @@ export interface CreateCubeResponse {
   cube: { name: string; version: CubeVersion };
 }
 
+export interface CopyCubeResponse {
+  name: string;
+  version_count: number;
+}
+
 export interface ListVersionsResponse {
   versions: CubeVersion[];
 }
@@ -73,6 +78,14 @@ export const cubeAPI = {
 
   createCube: async (name: string): Promise<CreateCubeResponse> => {
     const response: AxiosResponse<CreateCubeResponse> = await axios.post(CUBE_API_BASE_URL, { name });
+    return response.data;
+  },
+
+  copyCube: async (sourceName: string, targetName: string): Promise<CopyCubeResponse> => {
+    const response: AxiosResponse<CopyCubeResponse> = await axios.post(
+      `${CUBE_API_BASE_URL}/${encodeURIComponent(sourceName)}/copy`,
+      { targetName }
+    );
     return response.data;
   },
 

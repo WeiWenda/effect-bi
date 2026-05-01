@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { SettingsIcon, XIcon, ChevronDownIcon } from 'lucide-react';
 import type { DynamicDrilldownConfig, DimensionConfig, CubeMember } from '../../types/chart';
 
-interface DrilldownConfigSectionProps {
+export interface DynamicDrilldownConfigZoneProps {
   drilldownConfig: DynamicDrilldownConfig | undefined;
   onDrilldownConfigChange: (config: DynamicDrilldownConfig | undefined) => void;
   onDrilldownChange: (dimensions: string[]) => void;
@@ -10,18 +10,18 @@ interface DrilldownConfigSectionProps {
   availableDimensions: CubeMember[];
 }
 
-export function DrilldownConfigSection({
+export function DynamicDrilldownConfigZone({
   drilldownConfig,
   onDrilldownConfigChange,
   onDrilldownChange,
   selectedDrilldownDimensions,
   availableDimensions,
-}: DrilldownConfigSectionProps): React.JSX.Element {
+}: DynamicDrilldownConfigZoneProps): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false);
 
   const enabled = drilldownConfig?.enabled ?? false;
   const dimensions = drilldownConfig?.dimensions ?? [];
-  const selectionMode = drilldownConfig?.selectionMode ?? 'multiple';
+  const selectionMode = drilldownConfig?.selectionMode ?? 'single';
   const allowEmptySelection = drilldownConfig?.allowEmptySelection ?? true;
 
   const handleToggle = () => {
@@ -32,7 +32,7 @@ export function DrilldownConfigSection({
       onDrilldownConfigChange({
         enabled: true,
         dimensions: [],
-        selectionMode: 'multiple',
+        selectionMode: 'single',
         allowEmptySelection: true,
         defaultSelected: [],
       });
@@ -76,9 +76,10 @@ export function DrilldownConfigSection({
     onDrilldownConfigChange({
       ...drilldownConfig!,
       selectionMode: mode,
-      defaultSelected: mode === 'single' && selectedDrilldownDimensions.length > 1
-        ? [selectedDrilldownDimensions[0]]
-        : selectedDrilldownDimensions,
+      defaultSelected:
+        mode === 'single' && selectedDrilldownDimensions.length > 1
+          ? [selectedDrilldownDimensions[0]]
+          : selectedDrilldownDimensions,
     });
     if (mode === 'single' && selectedDrilldownDimensions.length > 1) {
       onDrilldownChange([selectedDrilldownDimensions[0]]);

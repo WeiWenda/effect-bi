@@ -1,37 +1,7 @@
 import { useState, useCallback } from 'react';
 import { XIcon, ChevronDownIcon, SettingsIcon, SlidersHorizontalIcon, LayersIcon } from 'lucide-react';
-import { TimeRangeFilter } from './TimeRangeFilter';
-import type { DynamicFilterConfig, DynamicDrilldownConfig, DimensionConfig, CubeMember, FilterOperator } from '../../types/chart';
-
-function isTimeType(type: string): boolean {
-  const lower = type.toLowerCase();
-  return lower.includes('time') || lower.includes('date') || lower.includes('timestamp');
-}
-
-function isRangeOperator(op: FilterOperator): boolean {
-  return op === 'inDateRange' || op === 'notInDateRange';
-}
-
-const ALL_OPERATORS: { value: FilterOperator; label: string }[] = [
-  { value: 'equals', label: '等于' },
-  { value: 'notEquals', label: '不等于' },
-  { value: 'contains', label: '包含' },
-  { value: 'notContains', label: '不包含' },
-  { value: 'in', label: '在列表中' },
-  { value: 'notIn', label: '不在列表中' },
-  { value: 'gt', label: '大于' },
-  { value: 'gte', label: '大于等于' },
-  { value: 'lt', label: '小于' },
-  { value: 'lte', label: '小于等于' },
-  { value: 'inDateRange', label: '在范围内' },
-  { value: 'notInDateRange', label: '不在范围内' },
-  { value: 'set', label: '有值' },
-  { value: 'notSet', label: '无值' },
-];
-
-function getOperatorLabel(op: FilterOperator): string {
-  return ALL_OPERATORS.find(o => o.value === op)?.label || op;
-}
+import { FilterValueBar } from '../filter';
+import type { DynamicFilterConfig, DynamicDrilldownConfig, DimensionConfig, CubeMember } from '../../types/chart';
 
 // 拖拽数据类型
 export const DRILLDOWN_DRAG_TYPE = 'application/x-drilldown-dimension';
@@ -138,7 +108,7 @@ export function ChartDynamicControls({
       onDrilldownConfigChange({
         enabled: true,
         dimensions: [],
-        selectionMode: 'multiple',
+        selectionMode: 'single',
         allowEmptySelection: true,
       });
     }
@@ -171,7 +141,7 @@ export function ChartDynamicControls({
   };
 
   const handleDrilldownDimensionToggle = (fieldName: string) => {
-    if (drilldownConfig?.selectionMode === 'single') {
+    if ((drilldownConfig?.selectionMode ?? 'single') === 'single') {
       // 单选模式：处理空选择和切换
       if (fieldName === '') {
         // 点击"无"选项，清空选择
@@ -201,7 +171,6 @@ export function ChartDynamicControls({
       {dynamicFilters.length > 0 && (
         <div className="space-y-2">
           {dynamicFilters.map((filter, index) => {
-            const isTimeRange = isTimeType(filter.type || '') && isRangeOperator(filter.operator);
             const currentValue = dynamicFilterValues[filter.field] || filter.defaultValues || [];
             const isFirst = index === 0;
             
@@ -216,39 +185,22 @@ export function ChartDynamicControls({
                   </>
                 )}
                 {!isFirst && <div className="w-12" />}
-                <div 
-                  className="bg-white border border-blue-200 rounded-md px-3 py-1 text-xs flex-1 max-w-md"
-                >
-                  <div className="flex items-center gap-2 w-full">
-                    <span className="text-gray-600 font-medium shrink-0">{getFieldTitle(filter.field)}</span>
-                    <span className="text-gray-400 shrink-0">{getOperatorLabel(filter.operator)}</span>
-                    {isTimeRange ? (
-                      <div className="flex-1">
-                        <TimeRangeFilter
-                          value={currentValue}
-                          onChange={values => onDynamicFilterChange(filter.field, values)}
-                          size="sm"
-                        />
-                      </div>
-                    ) : (
-                      <input
-                        type="text"
-                        value={currentValue.join(', ')}
-                        onChange={e => onDynamicFilterChange(filter.field, e.target.value.split(',').map(v => v.trim()).filter(Boolean))}
-                        placeholder="输入值..."
-                        className="flex-1 border border-gray-200 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-                      />
-                    )}
-                    {onRemoveDynamicFilter && (
-                      <button
-                        onClick={() => onRemoveDynamicFilter(filter.field)}
-                        className="text-gray-300 hover:text-red-500 transition-colors shrink-0 ml-2"
-                      >
-                        <XIcon className="size-3" />
-                      </button>
-                    )}
-                  </div>
-                </div>
+                <FilterValueBar
+                  fieldTitle={filter.displayName?.trim() || getFieldTitle(filter.field)}
+                  source={{
+                    operator: filter.operator,
+                    values: currentValue,
+                    type: filter.type,
+                  }}
+                  onPatch={patch => {
+                    const v = patch.values ?? currentValue;
+                    onDynamicFilterChange(filter.field, v);
+                  }}
+                  size="sm"
+                  className="max-w-md"
+                  allowRelativePersist={false}
+                  onRemove={onRemoveDynamicFilter ? () => onRemoveDynamicFilter(filter.field) : undefined}
+                />
               </div>
             );
           })}
@@ -260,7 +212,7 @@ export function ChartDynamicControls({
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1 text-xs text-gray-500">
             <LayersIcon className="size-3.5" />
-            <span>动态维度下钻:</span>
+            <span>维度下钻:</span>
           </div>
           
           {!drilldownConfig?.enabled ? (
@@ -290,7 +242,7 @@ export function ChartDynamicControls({
                     {isDragOver ? '释放以添加维度' : '从左侧字段列表拖入维度...'}
                   </span>
                 )}
-                {drilldownConfig.selectionMode === 'single' ? (
+                {(drilldownConfig.selectionMode ?? 'single') === 'single' ? (
                   // 单选模式：显示为切换按钮组
                   <div className="inline-flex rounded-md shadow-sm border border-gray-200">
                     {drilldownConfig.allowEmptySelection && (
@@ -417,7 +369,7 @@ export function ChartDynamicControls({
                       <input
                         type="radio"
                         name="selectionMode"
-                        checked={drilldownConfig.selectionMode === 'single'}
+                        checked={(drilldownConfig.selectionMode ?? 'single') === 'single'}
                         onChange={() => onDrilldownConfigChange({ ...drilldownConfig, selectionMode: 'single' })}
                         className="size-3 text-purple-600"
                       />
@@ -427,7 +379,7 @@ export function ChartDynamicControls({
                       <input
                         type="radio"
                         name="selectionMode"
-                        checked={drilldownConfig.selectionMode === 'multiple'}
+                        checked={(drilldownConfig.selectionMode ?? 'single') === 'multiple'}
                         onChange={() => onDrilldownConfigChange({ ...drilldownConfig, selectionMode: 'multiple' })}
                         className="size-3 text-purple-600"
                       />
