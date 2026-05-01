@@ -9,7 +9,7 @@ const router: Router = Router();
  */
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, viewName, chartType, dimensions, metrics, filters, sort, limit } = req.body;
+    const { name, viewName, chartType, dimensions, metrics, filters, dynamicFilters, drilldownConfig, sort, limit } = req.body;
 
     if (!viewName) {
       res.status(400).json({ error: 'viewName is required' });
@@ -17,8 +17,8 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     }
 
     const result = await pool.query(
-      `INSERT INTO charts (name, view_name, chart_type, dimensions, metrics, filters, sort, "limit")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO charts (name, view_name, chart_type, dimensions, metrics, filters, dynamic_filters, drilldown_config, sort, "limit")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
       [
         name || '未命名图表',
@@ -27,6 +27,8 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
         JSON.stringify(dimensions || []),
         JSON.stringify(metrics || []),
         JSON.stringify(filters || []),
+        JSON.stringify(dynamicFilters || []),
+        drilldownConfig ? JSON.stringify(drilldownConfig) : null,
         JSON.stringify(sort || []),
         limit || 500,
       ]
@@ -67,7 +69,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 router.put('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { name, viewName, chartType, dimensions, metrics, filters, sort, limit } = req.body;
+    const { name, viewName, chartType, dimensions, metrics, filters, dynamicFilters, drilldownConfig, sort, limit } = req.body;
 
     const existing = await pool.query('SELECT * FROM charts WHERE id = $1', [id]);
     if (existing.rows.length === 0) {
@@ -83,9 +85,11 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
         dimensions = COALESCE($4, dimensions),
         metrics = COALESCE($5, metrics),
         filters = COALESCE($6, filters),
-        sort = COALESCE($7, sort),
-        "limit" = COALESCE($8, "limit")
-       WHERE id = $9
+        dynamic_filters = COALESCE($7, dynamic_filters),
+        drilldown_config = COALESCE($8, drilldown_config),
+        sort = COALESCE($9, sort),
+        "limit" = COALESCE($10, "limit")
+       WHERE id = $11
        RETURNING *`,
       [
         name || null,
@@ -94,6 +98,8 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
         dimensions !== undefined ? JSON.stringify(dimensions) : null,
         metrics !== undefined ? JSON.stringify(metrics) : null,
         filters !== undefined ? JSON.stringify(filters) : null,
+        dynamicFilters !== undefined ? JSON.stringify(dynamicFilters) : null,
+        drilldownConfig !== undefined ? (drilldownConfig ? JSON.stringify(drilldownConfig) : null) : null,
         sort !== undefined ? JSON.stringify(sort) : null,
         limit !== undefined ? limit : null,
         id,

@@ -91,6 +91,8 @@ export const dashboardAPI = {
       dimensions: typeof c.dimensions === 'string' ? JSON.parse(c.dimensions) : c.dimensions || [],
       metrics: typeof c.metrics === 'string' ? JSON.parse(c.metrics) : c.metrics || [],
       filters: typeof c.filters === 'string' ? JSON.parse(c.filters) : c.filters || [],
+      dynamicFilters: typeof c.dynamic_filters === 'string' ? JSON.parse(c.dynamic_filters) : c.dynamic_filters || [],
+      drilldownConfig: typeof c.drilldown_config === 'string' ? JSON.parse(c.drilldown_config) : c.drilldown_config,
       sort: typeof c.sort === 'string' ? JSON.parse(c.sort) : c.sort || [],
       limit: c.limit || 500,
       createdAt: c.created_at,

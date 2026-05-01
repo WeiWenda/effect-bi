@@ -1,16 +1,19 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { BarChart3Icon } from 'lucide-react';
+import { BarChart3Icon, LayersIcon, SettingsIcon, XIcon, ChevronDownIcon, PlusIcon } from 'lucide-react';
 import { ViewSelectorPanel } from './ViewSelectorPanel';
 import { ChartTypeSelector } from './ChartTypeSelector';
 import { DimensionDropZone } from './DimensionDropZone';
 import { MetricDropZone } from './MetricDropZone';
 import { FilterConfigPanel } from './FilterConfigPanel';
 import { ChartRenderer } from './ChartRenderer';
+import { ChartDynamicControls } from './ChartDynamicControls';
+import { DrilldownConfigSection } from './DrilldownConfigSection';
+import { DynamicFilterConfigSection } from './DynamicFilterConfigSection';
 import { PinToDashboardDialog } from './PinToDashboardDialog';
 import { cubeProxyAPI } from '../../services/cubeProxyApi';
 import { chartAPI } from '../../services/chartApi';
-import type { ChartType, DimensionConfig, MetricConfig, FilterConfig, SortConfig, CubeMeta, CubeQuery } from '../../types/chart';
+import type { ChartType, DimensionConfig, MetricConfig, FilterConfig, SortConfig, CubeMeta, CubeQuery, DynamicFilterConfig, DynamicDrilldownConfig } from '../../types/chart';
 
 function buildCubeQuery(
   _chartType: ChartType,
@@ -19,6 +22,9 @@ function buildCubeQuery(
   filters: FilterConfig[],
   sort: SortConfig[],
   limit: number,
+  dynamicFilterValues?: Record<string, string[]>,
+  drilldownConfig?: DynamicDrilldownConfig,
+  selectedDrilldownDimensions?: string[],
 ): CubeQuery {
   const query: CubeQuery = {
     measures: [],
@@ -29,7 +35,16 @@ function buildCubeQuery(
     limit,
   };
 
-  for (const dim of dimensions) {
+  // 合并基础维度和下钻维度
+  let finalDimensions = [...dimensions];
+  if (drilldownConfig?.enabled && selectedDrilldownDimensions && selectedDrilldownDimensions.length > 0) {
+    const drilldownDims = drilldownConfig.dimensions.filter(d => 
+      selectedDrilldownDimensions.includes(d.field)
+    );
+    finalDimensions = [...finalDimensions, ...drilldownDims];
+  }
+
+  for (const dim of finalDimensions) {
     if (dim.timeGranularity) {
       query.timeDimensions.push({
         dimension: dim.field,
@@ -44,12 +59,26 @@ function buildCubeQuery(
     query.measures.push(metric.field);
   }
 
+  // 静态过滤器
   for (const filter of filters) {
     query.filters.push({
       member: filter.field,
       operator: filter.operator,
       values: filter.values,
     });
+  }
+
+  // 动态过滤器值（运行时用户调整的值）
+  if (dynamicFilterValues) {
+    for (const [field, values] of Object.entries(dynamicFilterValues)) {
+      if (values.length > 0) {
+        query.filters.push({
+          member: field,
+          operator: 'in',
+          values,
+        });
+      }
+    }
   }
 
   for (const s of sort) {
@@ -67,6 +96,8 @@ interface QueryDraft {
   dimensions: DimensionConfig[];
   metrics: MetricConfig[];
   filters: FilterConfig[];
+  dynamicFilters?: DynamicFilterConfig[];
+  drilldownConfig?: DynamicDrilldownConfig;
   sort: SortConfig[];
   chartName: string;
 }
@@ -104,6 +135,12 @@ export function VisualQueryPage(): React.JSX.Element {
   const [dimensions, setDimensions] = useState<DimensionConfig[]>(draft?.dimensions ?? []);
   const [metrics, setMetrics] = useState<MetricConfig[]>(draft?.metrics ?? []);
   const [filters, setFilters] = useState<FilterConfig[]>(draft?.filters ?? []);
+  const [dynamicFilters, setDynamicFilters] = useState<DynamicFilterConfig[]>(draft?.dynamicFilters ?? []);
+  const [dynamicFilterValues, setDynamicFilterValues] = useState<Record<string, string[]>>({});
+  const [drilldownConfig, setDrilldownConfig] = useState<DynamicDrilldownConfig | undefined>(draft?.drilldownConfig);
+  const [selectedDrilldownDimensions, setSelectedDrilldownDimensions] = useState<string[]>(
+    draft?.drilldownConfig?.defaultSelected ?? []
+  );
   const [sort, setSort] = useState<SortConfig[]>(draft?.sort ?? []);
   const [limit] = useState(500);
 
@@ -116,8 +153,18 @@ export function VisualQueryPage(): React.JSX.Element {
 
   // Persist query draft to localStorage whenever config changes
   useEffect(() => {
-    saveDraft({ selectedView, chartType, dimensions, metrics, filters, sort, chartName });
-  }, [selectedView, chartType, dimensions, metrics, filters, sort, chartName]);
+    saveDraft({ 
+      selectedView, 
+      chartType, 
+      dimensions, 
+      metrics, 
+      filters, 
+      dynamicFilters,
+      drilldownConfig,
+      sort, 
+      chartName 
+    });
+  }, [selectedView, chartType, dimensions, metrics, filters, dynamicFilters, drilldownConfig, sort, chartName]);
 
   // Restore selectedCube from draft after cubes metadata loads
   useEffect(() => {
@@ -138,11 +185,14 @@ export function VisualQueryPage(): React.JSX.Element {
       setDimensions(chart.dimensions);
       setMetrics(chart.metrics);
       setFilters(chart.filters);
+      setDynamicFilters(chart.dynamicFilters ?? []);
+      setDrilldownConfig(chart.drilldownConfig);
+      setSelectedDrilldownDimensions(chart.drilldownConfig?.defaultSelected ?? []);
       setSort(chart.sort);
       setChartName(chart.name);
       // Also load cube metadata so the ViewSelectorPanel can expand the right view
       cubeProxyAPI.meta().then(res => {
-        const cube = (res.cubes || []).find(c => c.name === chart.cubeName);
+        const cube = (res.cubes || []).find(c => c.name === chart.viewName);
         if (cube) setSelectedCube(cube);
       }).catch(() => {});
     }).catch(err => {
@@ -170,6 +220,10 @@ export function VisualQueryPage(): React.JSX.Element {
     setDimensions([]);
     setMetrics([]);
     setFilters([]);
+    setDynamicFilters([]);
+    setDynamicFilterValues({});
+    setDrilldownConfig(undefined);
+    setSelectedDrilldownDimensions([]);
     setSort([]);
     setQueryData([]);
   }, []);
@@ -179,7 +233,17 @@ export function VisualQueryPage(): React.JSX.Element {
     setQueryLoading(true);
     setQueryError(null);
     try {
-      const cubeQuery = buildCubeQuery(chartType, dimensions, metrics, filters, sort, limit);
+      const cubeQuery = buildCubeQuery(
+        chartType, 
+        dimensions, 
+        metrics, 
+        filters, 
+        sort, 
+        limit,
+        dynamicFilterValues,
+        drilldownConfig,
+        selectedDrilldownDimensions
+      );
       const result = await cubeProxyAPI.load(cubeQuery);
       setQueryData(result.data || []);
     } catch (err: any) {
@@ -187,7 +251,7 @@ export function VisualQueryPage(): React.JSX.Element {
     } finally {
       setQueryLoading(false);
     }
-  }, [chartType, dimensions, metrics, filters, sort, limit]);
+  }, [chartType, dimensions, metrics, filters, sort, limit, dynamicFilterValues, drilldownConfig, selectedDrilldownDimensions]);
 
   const handlePinToDashboard = useCallback(async (dashboardId: number, modifiedChartName: string) => {
     try {
@@ -196,29 +260,24 @@ export function VisualQueryPage(): React.JSX.Element {
         setChartName(finalChartName);
       }
       let chartId: number;
+      const chartData = {
+        name: finalChartName,
+        viewName: selectedView || '',
+        chartType,
+        dimensions,
+        metrics,
+        filters,
+        dynamicFilters,
+        drilldownConfig,
+        sort,
+        limit,
+      };
+      
       if (editingChartId) {
-        await chartAPI.update(editingChartId, {
-          name: finalChartName,
-          viewName: selectedView || '',
-          chartType,
-          dimensions,
-          metrics,
-          filters,
-          sort,
-          limit,
-        });
+        await chartAPI.update(editingChartId, chartData);
         chartId = editingChartId;
       } else {
-        const chart = await chartAPI.create({
-          name: finalChartName,
-          viewName: selectedView || '',
-          chartType,
-          dimensions,
-          metrics,
-          filters,
-          sort,
-          limit,
-        });
+        const chart = await chartAPI.create(chartData);
         chartId = chart.id!;
       }
 
@@ -294,11 +353,46 @@ export function VisualQueryPage(): React.JSX.Element {
 
           <MetricDropZone metrics={metrics} onChange={setMetrics} />
 
-          <FilterConfigPanel filters={filters} onChange={setFilters} availableFields={availableFields} />
+          <FilterConfigPanel 
+            filters={filters} 
+            onChange={setFilters} 
+            availableFields={availableFields}
+          />
+
+          {/* 动态过滤器配置 */}
+          <DynamicFilterConfigSection
+            dynamicFilters={dynamicFilters}
+            onDynamicFiltersChange={setDynamicFilters}
+            availableFields={availableFields}
+          />
+
+          {/* 动态维度下钻配置 */}
+          <DrilldownConfigSection
+            drilldownConfig={drilldownConfig}
+            onDrilldownConfigChange={setDrilldownConfig}
+            onDrilldownChange={setSelectedDrilldownDimensions}
+            selectedDrilldownDimensions={selectedDrilldownDimensions}
+            availableDimensions={selectedCube?.dimensions ?? []}
+          />
         </div>
 
         {/* Right Panel - Chart Preview */}
         <div className="flex-1 flex flex-col overflow-hidden bg-white">
+          {/* 运行时动态过滤器与维度下钻控件区 */}
+          <ChartDynamicControls
+            dynamicFilters={dynamicFilters}
+            dynamicFilterValues={dynamicFilterValues}
+            onDynamicFilterChange={(field, values) => {
+              setDynamicFilterValues(prev => ({ ...prev, [field]: values }));
+            }}
+            drilldownConfig={drilldownConfig}
+            selectedDrilldownDimensions={selectedDrilldownDimensions}
+            onDrilldownChange={setSelectedDrilldownDimensions}
+            availableFields={selectedCube?.dimensions ?? []}
+            availableDimensions={selectedCube?.dimensions ?? []}
+            isEditMode={false}
+          />
+          
           <div className="flex-1 p-4 overflow-auto">
             {queryError ? (
               <div className="text-sm text-red-500 text-center py-8">{queryError}</div>

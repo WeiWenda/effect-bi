@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Loader2Icon, HashIcon, ClockIcon, TypeIcon, ToggleLeftIcon, PencilIcon } from 'lucide-react';
 import { cubeProxyAPI } from '../../services/cubeProxyApi';
 import { Select } from '../ui/select';
+import { DRILLDOWN_DRAG_TYPE } from './ChartDynamicControls';
 import type { CubeMeta, CubeMember } from '../../types/chart';
 
 interface ViewSelectorPanelProps {
@@ -66,12 +67,19 @@ export function ViewSelectorPanel({ selectedView, onViewSelect }: ViewSelectorPa
   };
 
   const handleDragStart = (e: React.DragEvent, member: CubeMember, memberType: 'dimension' | 'measure') => {
+    // 设置通用拖拽数据（用于拖放到维度/指标放置区）
     e.dataTransfer.setData('application/json', JSON.stringify({
       name: member.name,
       title: member.shortTitle || member.title || member.name,
       type: member.type,
       memberType,
     }));
+    
+    // 维度字段还可以用于下钻，设置专用拖拽类型
+    if (memberType === 'dimension') {
+      e.dataTransfer.setData(DRILLDOWN_DRAG_TYPE, member.name);
+    }
+    
     e.dataTransfer.effectAllowed = 'copy';
   };
 

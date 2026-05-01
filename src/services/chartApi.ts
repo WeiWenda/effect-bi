@@ -23,6 +23,8 @@ function toChartConfig(row: any): ChartConfig {
     dimensions: typeof row.dimensions === 'string' ? JSON.parse(row.dimensions) : row.dimensions || [],
     metrics: typeof row.metrics === 'string' ? JSON.parse(row.metrics) : row.metrics || [],
     filters: typeof row.filters === 'string' ? JSON.parse(row.filters) : row.filters || [],
+    dynamicFilters: typeof row.dynamic_filters === 'string' ? JSON.parse(row.dynamic_filters) : row.dynamic_filters || [],
+    drilldownConfig: typeof row.drilldown_config === 'string' ? JSON.parse(row.drilldown_config) : row.drilldown_config,
     sort: typeof row.sort === 'string' ? JSON.parse(row.sort) : row.sort || [],
     limit: row.limit || 500,
     createdAt: row.created_at,
@@ -38,6 +40,8 @@ function toApiBody(config: Partial<ChartConfig>) {
     dimensions: config.dimensions || [],
     metrics: config.metrics || [],
     filters: config.filters || [],
+    dynamicFilters: config.dynamicFilters || [],
+    drilldownConfig: config.drilldownConfig,
     sort: config.sort || [],
     limit: config.limit,
   };

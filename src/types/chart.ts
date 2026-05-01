@@ -42,6 +42,28 @@ export interface FilterConfig {
   type?: string;
   operator: FilterOperator;
   values: any[];
+  isDynamic?: boolean; // 标记是否为动态过滤器
+}
+
+// 动态过滤配置（设计时配置，不包含运行时值）
+export interface DynamicFilterConfig {
+  field: string;
+  title?: string;
+  shortTitle?: string;
+  type?: string;
+  operator: FilterOperator;
+  defaultValues?: any[]; // 默认值
+}
+
+// 动态维度下钻配置
+export type DrilldownSelectionMode = 'single' | 'multiple';
+
+export interface DynamicDrilldownConfig {
+  enabled: boolean;
+  dimensions: DimensionConfig[]; // 可下钻的维度列表
+  selectionMode: DrilldownSelectionMode;
+  allowEmptySelection: boolean; // 是否允许不选中任何维度
+  defaultSelected?: string[]; // 默认选中的维度字段名
 }
 
 export interface SortConfig {
@@ -57,6 +79,8 @@ export interface ChartConfig {
   dimensions: DimensionConfig[];
   metrics: MetricConfig[];
   filters: FilterConfig[];
+  dynamicFilters?: DynamicFilterConfig[]; // 动态过滤器配置
+  drilldownConfig?: DynamicDrilldownConfig; // 动态维度下钻配置
   sort: SortConfig[];
   limit: number;
   createdAt?: string;
@@ -122,6 +146,24 @@ export interface DashboardFolder {
   updated_at: string;
 }
 
+export type DashboardWidgetType = 'chart' | 'filter' | 'markdown' | 'tab-group';
+
+// 标签组内部的图表布局
+export interface InnerChartLayout {
+  chartId: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface TabGroupTab {
+  id: string;
+  label: string;
+  chartIds: number[];
+  innerLayout?: InnerChartLayout[];
+}
+
 export interface DashboardLayoutItem {
   i: string;
   x: number;
@@ -130,6 +172,12 @@ export interface DashboardLayoutItem {
   h: number;
   minW?: number;
   minH?: number;
+  widgetType?: DashboardWidgetType;
+  markdownContent?: string;
+  tabGroupTabs?: TabGroupTab[];
+  activeTabId?: string;
+  // 图表归属关系: "tabGroupId:tabId" 表示归属于某个标签组的某个标签
+  belongsTo?: string;
 }
 
 export interface DashboardInfo {

@@ -1,4 +1,5 @@
 import { XIcon, ClockIcon } from 'lucide-react';
+import { Select } from '../ui/select';
 import type { DimensionConfig, TimeGranularity } from '../../types/chart';
 
 interface DimensionDropZoneProps {
@@ -77,16 +78,13 @@ export function DimensionDropZone({ dimensions, onChange }: DimensionDropZonePro
               {isTimeType(dim.type || '') && <ClockIcon className="size-3 text-orange-500" />}
               <span className="text-gray-700">{dim.title || dim.field}</span>
               {isTimeType(dim.type || '') && (
-                <select
+                <Select
                   value={dim.timeGranularity || 'day'}
-                  onChange={e => updateGranularity(idx, e.target.value as TimeGranularity)}
-                  className="ml-1 text-xs border border-gray-200 rounded px-1 py-0.5 bg-gray-50 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                  onClick={e => e.stopPropagation()}
-                >
-                  {GRANULARITY_OPTIONS.map(g => (
-                    <option key={g.value} value={g.value}>{g.label}</option>
-                  ))}
-                </select>
+                  onChange={val => updateGranularity(idx, val as TimeGranularity)}
+                  options={GRANULARITY_OPTIONS}
+                  size="sm"
+                  className="ml-1"
+                />
               )}
               <button
                 onClick={() => removeDimension(idx)}
