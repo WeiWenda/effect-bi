@@ -149,6 +149,11 @@ export const etlAPI = {
     return response.data;
   },
 
+  deleteAdhocSubmission: async (id: number): Promise<{ success: boolean }> => {
+    const response = await axios.delete(`${ETL_API_BASE_URL}/adhoc/submissions/${id}`);
+    return response.data;
+  },
+
   listTasks: async (): Promise<{ tasks: EtlTaskListRow[] }> => {
     const response = await axios.get(`${ETL_API_BASE_URL}/tasks`);
     return response.data;

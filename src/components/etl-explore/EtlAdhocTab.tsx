@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Editor from '@monaco-editor/react';
-import { PlayIcon, Loader2Icon } from 'lucide-react';
+import { PlayIcon, Loader2Icon, Trash2Icon } from 'lucide-react';
 import { GravitinoMetadataTree } from './GravitinoMetadataTree';
 import { etlAPI, type AdhocSubmission } from '../../services/etlApi';
 import type { EtlAdhocTabPersistedBody } from '../../utils/etlWorkspaceStorage';
@@ -32,6 +32,7 @@ export function EtlAdhocTab({
   const [resultCols, setResultCols] = useState<{ name: string; type: string }[]>([]);
   const [resultRows, setResultRows] = useState<Record<string, unknown>[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [loadingSubmission, setLoadingSubmission] = useState(false);
   const [resultError, setResultError] = useState<string | null>(null);
   const restoredSelectionRef = useRef(false);
@@ -159,6 +160,27 @@ export function EtlAdhocTab({
     setSql(prev => (prev && !prev.endsWith('\n') ? `${prev}\n` : prev || '') + text);
   }, []);
 
+  const handleDeleteSubmission = async (submissionId: number) => {
+    if (!window.confirm('确定删除这条历史查询？')) return;
+    setDeletingId(submissionId);
+    try {
+      await etlAPI.deleteAdhocSubmission(submissionId);
+      setSubmissions(prev => prev.filter(s => s.id !== submissionId));
+      if (selectedId === submissionId) {
+        setSelectedId(null);
+        setResultCols([]);
+        setResultRows([]);
+        setResultError(null);
+      }
+      toast('已删除', 'success');
+    } catch (e) {
+      console.error(e);
+      toast('删除失败', 'error');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const handleSubmit = async () => {
     if (sid == null) return;
     const trimmed = sql.trim();
@@ -256,17 +278,38 @@ export function EtlAdhocTab({
                 <p className="px-2 text-xs text-gray-400 py-2">暂无提交</p>
               ) : (
                 submissions.map(s => (
-                  <button
+                  <div
                     key={s.id}
-                    type="button"
-                    onClick={() => void onSelectSubmission(s)}
-                    className={`w-full text-left px-2 py-1.5 text-[11px] border-b border-gray-50 hover:bg-gray-50 ${
+                    className={`flex items-stretch gap-0 border-b border-gray-50 text-[11px] ${
                       selectedId === s.id ? 'bg-blue-50 text-blue-900' : 'text-gray-700'
                     }`}
                   >
-                    <div className="truncate font-medium">{new Date(s.submittedAt).toLocaleString('zh-CN')}</div>
-                    <div className="truncate text-gray-400">{s.status}</div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => void onSelectSubmission(s)}
+                      className="flex-1 min-w-0 text-left px-2 py-1.5 hover:bg-gray-50/80"
+                    >
+                      <div className="truncate font-medium">{new Date(s.submittedAt).toLocaleString('zh-CN')}</div>
+                      <div className="truncate text-gray-400">{s.status}</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        void handleDeleteSubmission(s.id);
+                      }}
+                      disabled={deletingId === s.id}
+                      className="shrink-0 px-1.5 py-1 text-gray-400 hover:text-red-600 hover:bg-red-50/80 disabled:opacity-40"
+                      title="删除"
+                      aria-label="删除该条历史"
+                    >
+                      {deletingId === s.id ? (
+                        <Loader2Icon className="size-3.5 animate-spin" />
+                      ) : (
+                        <Trash2Icon className="size-3.5" />
+                      )}
+                    </button>
+                  </div>
                 ))
               )}
             </div>
