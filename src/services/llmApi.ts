@@ -1,7 +1,7 @@
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import type { RemoteThreadListAdapter } from '@assistant-ui/react';
 
-const API_BASE_URL = '/api/v1';
+const API_BASE_URL = '/langgraph/api/v1';
 
 export interface User {
   id: number;

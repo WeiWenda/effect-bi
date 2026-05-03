@@ -2,7 +2,6 @@
 CREATE TABLE IF NOT EXISTS charts (
   id SERIAL PRIMARY KEY,
   name VARCHAR(256) NOT NULL DEFAULT '未命名图表',
-  cube_name VARCHAR(256) NOT NULL,
   view_name VARCHAR(256) NOT NULL,
   chart_type VARCHAR(32) NOT NULL DEFAULT 'table',
   dimensions JSONB NOT NULL DEFAULT '[]',
@@ -14,7 +13,7 @@ CREATE TABLE IF NOT EXISTS charts (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_charts_cube_view ON charts(cube_name, view_name);
+CREATE INDEX IF NOT EXISTS idx_charts_cube_view ON charts(view_name);
 
 -- Trigger to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_charts_updated_at()

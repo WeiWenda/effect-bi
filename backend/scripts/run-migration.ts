@@ -21,7 +21,11 @@ async function runMigration() {
     'create_charts.sql',
     'create_dashboard_folders.sql',
     'create_dashboards.sql',
-    'create_dashboard_charts.sql'
+    'create_dashboard_charts.sql',
+    'create_etl_adhoc.sql',
+    'create_etl_task_versions.sql',
+    'create_etl_airflow_deployments.sql',
+    'create_etl_folders.sql'
   ];
 
   const client = await pool.connect();
