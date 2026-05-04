@@ -220,25 +220,46 @@ export function EtlLibrarySidebar({
   };
 
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
+  const [folderDialogMode, setFolderDialogMode] = useState<'create' | 'rename'>('create');
+  const [renameTargetId, setRenameTargetId] = useState<number | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderParentId, setNewFolderParentId] = useState<number | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
 
-  const handleCreateFolder = async () => {
+  const resetFolderDialog = () => {
+    setFolderDialogMode('create');
+    setRenameTargetId(null);
+    setNewFolderName('');
+    setNewFolderParentId(null);
+  };
+
+  const openCreateFolderDialog = (parentId: number | null) => {
+    setFolderDialogMode('create');
+    setRenameTargetId(null);
+    setNewFolderParentId(parentId);
+    setNewFolderName('');
+    setFolderDialogOpen(true);
+  };
+
+  const handleFolderDialogSubmit = async () => {
     if (!newFolderName.trim()) {
       toast('请输入文件夹名称', 'error');
       return;
     }
     setCreatingFolder(true);
     try {
-      await etlFolderAPI.create(newFolderName.trim(), newFolderParentId);
-      toast('文件夹创建成功', 'success');
+      if (folderDialogMode === 'rename' && renameTargetId != null) {
+        await etlFolderAPI.update(renameTargetId, { name: newFolderName.trim() });
+        toast('重命名成功', 'success');
+      } else {
+        await etlFolderAPI.create(newFolderName.trim(), newFolderParentId);
+        toast('文件夹创建成功', 'success');
+      }
       setFolderDialogOpen(false);
-      setNewFolderName('');
-      setNewFolderParentId(null);
+      resetFolderDialog();
       await loadData();
     } catch {
-      toast('创建失败', 'error');
+      toast(folderDialogMode === 'rename' ? '重命名失败' : '创建失败', 'error');
     } finally {
       setCreatingFolder(false);
     }
@@ -618,13 +639,28 @@ export function EtlLibrarySidebar({
             role="menuitem"
             className="w-full text-left px-3 py-2 hover:bg-gray-50 text-gray-800"
             onClick={() => {
-              setNewFolderParentId(folderMoreMenu.folderId);
-              setNewFolderName('');
-              setFolderDialogOpen(true);
+              openCreateFolderDialog(folderMoreMenu.folderId);
               setFolderMoreMenu(null);
             }}
           >
             创建子文件夹
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full text-left px-3 py-2 hover:bg-gray-50 text-gray-800"
+            onClick={() => {
+              const fid = folderMoreMenu.folderId;
+              const row = folders.find(f => f.id === fid);
+              setFolderDialogMode('rename');
+              setRenameTargetId(fid);
+              setNewFolderName(row?.name ?? '');
+              setNewFolderParentId(null);
+              setFolderDialogOpen(true);
+              setFolderMoreMenu(null);
+            }}
+          >
+            重命名
           </button>
           <div className="my-1 border-t border-gray-100" />
           <button
@@ -651,11 +687,7 @@ export function EtlLibrarySidebar({
             </button>
             <button
               type="button"
-              onClick={() => {
-                setNewFolderParentId(null);
-                setNewFolderName('');
-                setFolderDialogOpen(true);
-              }}
+              onClick={() => openCreateFolderDialog(null)}
               className="p-1.5 hover:bg-gray-100 rounded text-gray-500 hover:text-gray-700 transition-colors"
               title="新建文件夹"
             >
@@ -676,10 +708,16 @@ export function EtlLibrarySidebar({
         </div>
       </div>
 
-      <Dialog open={folderDialogOpen} onOpenChange={setFolderDialogOpen}>
+      <Dialog
+        open={folderDialogOpen}
+        onOpenChange={open => {
+          setFolderDialogOpen(open);
+          if (!open) resetFolderDialog();
+        }}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>新建文件夹</DialogTitle>
+            <DialogTitle>{folderDialogMode === 'rename' ? '重命名文件夹' : '新建文件夹'}</DialogTitle>
           </DialogHeader>
           <div className="py-4 space-y-3">
             <div>
@@ -691,29 +729,37 @@ export function EtlLibrarySidebar({
                 placeholder="请输入文件夹名称"
                 className="w-full text-sm border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 onKeyDown={e => {
-                  if (e.key === 'Enter') void handleCreateFolder();
+                  if (e.key === 'Enter') void handleFolderDialogSubmit();
                 }}
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">父文件夹 (可选)</label>
-              <Select
-                value={newFolderParentId != null ? String(newFolderParentId) : ''}
-                onChange={val => setNewFolderParentId(val ? parseInt(val, 10) : null)}
-                options={[
-                  { value: '', label: '无 (根目录)' },
-                  ...folders.map(f => ({ value: String(f.id), label: f.name })),
-                ]}
-                placeholder="无 (根目录)"
-              />
-            </div>
+            {folderDialogMode === 'create' ? (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">父文件夹 (可选)</label>
+                <Select
+                  value={newFolderParentId != null ? String(newFolderParentId) : ''}
+                  onChange={val => setNewFolderParentId(val ? parseInt(val, 10) : null)}
+                  options={[
+                    { value: '', label: '无 (根目录)' },
+                    ...folders.map(f => ({ value: String(f.id), label: f.name })),
+                  ]}
+                  placeholder="无 (根目录)"
+                />
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setFolderDialogOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setFolderDialogOpen(false);
+                resetFolderDialog();
+              }}
+            >
               取消
             </Button>
-            <Button onClick={() => void handleCreateFolder()} disabled={creatingFolder || !newFolderName.trim()}>
-              {creatingFolder ? '创建中...' : '创建'}
+            <Button onClick={() => void handleFolderDialogSubmit()} disabled={creatingFolder || !newFolderName.trim()}>
+              {creatingFolder ? (folderDialogMode === 'rename' ? '保存中...' : '创建中...') : folderDialogMode === 'rename' ? '保存' : '创建'}
             </Button>
           </DialogFooter>
         </DialogContent>

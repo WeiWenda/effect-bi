@@ -15,6 +15,12 @@ import '@xyflow/react/dist/style.css';
 import { ChevronLeft, ChevronRight, Plus, Minus, ExternalLink, Eye, EyeOff, Check, MoreVerticalIcon } from 'lucide-react';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import { lineageAPI, LineageNode, LineageRelationship } from '../../services/lineageApi';
+import {
+  lineageEntityRouteTableName,
+  lineageTableDescription,
+  lineageTableDisplayName,
+  lineageTableLayer,
+} from '../../services/lineageNodeMeta';
 import { dagAPI } from '../../services/dagApi';
 import { LineageConfigPanel, LineageConfig } from './LineageConfigPanel';
 import { HiddenNodesPanel } from './HiddenNodesPanel';
@@ -23,10 +29,14 @@ import { useToast } from '../ui/toast';
 interface LineageGraphTabProps {
   entityId: string;
   tableName: string;
+  /** 用于详情页 URL、与 /lineage/entity?tableName= 一致 */
+  routeTableName: string;
 }
 
 interface NodeData {
   label: string;
+  /** 新开标签页用；缺省与 label 相同 */
+  routeTableName?: string;
   layer?: string;
   description?: string;
   entityId: string;
@@ -50,7 +60,8 @@ const CustomNode = ({ data, onToggleHide, onToggleSelect, onToggleCollapse, onLo
   const handleOpenNewPage = (e: React.MouseEvent) => {
     e.stopPropagation();
     // TODO: Open new page with current node as center
-    window.open(`/lineage/table/${data.label}`, '_blank');
+    const key = encodeURIComponent(data.routeTableName ?? data.label);
+    window.open(`/lineage/table/${key}`, '_blank');
   };
 
   const showLeftButton = data.isCenter || data.direction === 'upstream';
@@ -157,10 +168,10 @@ const CustomNode = ({ data, onToggleHide, onToggleSelect, onToggleCollapse, onLo
   );
 };
 
-export function LineageGraphTab({ entityId, tableName }: LineageGraphTabProps): React.JSX.Element {
+export function LineageGraphTab({ entityId, tableName, routeTableName }: LineageGraphTabProps): React.JSX.Element {
   return (
     <ReactFlowProvider>
-      <LineageGraphContent entityId={entityId} tableName={tableName} />
+      <LineageGraphContent entityId={entityId} tableName={tableName} routeTableName={routeTableName} />
     </ReactFlowProvider>
   );
 }
@@ -222,7 +233,7 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], options = {}): Promis
     });
 };
 
-const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
+const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGraphTabProps) => {
   const { toast } = useToast();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -497,9 +508,10 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
         if (pathNodes.length > 0) {
           const endNode = pathNodes[pathNodes.length - 1];
           const newNodeId = endNode.id;
-          const nodeName = endNode.properties.table_name || endNode.properties.name || 'Unknown';
-          const layer = endNode.properties.layer || endNode.properties.tier;
-          const description = endNode.properties.description || endNode.properties.comment || '';
+          const ep = endNode.properties as Record<string, unknown>;
+          const nodeName = lineageTableDisplayName(ep);
+          const layer = lineageTableLayer(ep);
+          const description = lineageTableDescription(ep);
 
           if (!existingNodeIds.has(newNodeId)) {
             // Position new nodes near their parent to avoid flash at (0,0)
@@ -515,6 +527,7 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
               },
               data: {
                 label: nodeName,
+                routeTableName: lineageEntityRouteTableName(ep),
                 layer,
                 description,
                 entityId: newNodeId,
@@ -632,6 +645,7 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
         position: { x: 0, y: 0 },
         data: {
           label: tableName,
+          routeTableName,
           entityId,
           isCenter: true,
           direction: 'center',
@@ -655,9 +669,10 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
         if (pathNodes.length > 0) {
           const upstreamNode = pathNodes[pathNodes.length - 1]; // Get the last node (actual upstream node)
           const nodeId = upstreamNode.id;
-          const nodeName = upstreamNode.properties.table_name || upstreamNode.properties.name || 'Unknown';
-          const layer = upstreamNode.properties.layer || upstreamNode.properties.tier;
-          const description = upstreamNode.properties.description || upstreamNode.properties.comment || '';
+          const up = upstreamNode.properties as Record<string, unknown>;
+          const nodeName = lineageTableDisplayName(up);
+          const layer = lineageTableLayer(up);
+          const description = lineageTableDescription(up);
 
           if (!nodeMap.has(nodeId)) {
             upstreamOrder.push(nodeId);
@@ -667,6 +682,7 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
               position: { x: 0, y: 0 },
               data: {
                 label: nodeName,
+                routeTableName: lineageEntityRouteTableName(up),
                 layer,
                 description,
                 entityId: nodeId,
@@ -705,9 +721,10 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
         if (pathNodes.length > 0) {
           const downstreamNode = pathNodes[pathNodes.length - 1];
           const nodeId = downstreamNode.id;
-          const nodeName = downstreamNode.properties.table_name || downstreamNode.properties.name || 'Unknown';
-          const layer = downstreamNode.properties.layer || downstreamNode.properties.tier;
-          const description = downstreamNode.properties.description || downstreamNode.properties.comment || '';
+          const dp = downstreamNode.properties as Record<string, unknown>;
+          const nodeName = lineageTableDisplayName(dp);
+          const layer = lineageTableLayer(dp);
+          const description = lineageTableDescription(dp);
 
           if (!nodeMap.has(nodeId)) {
             downstreamOrder.push(nodeId);
@@ -717,6 +734,7 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
               position: { x: 0, y: 0 },
               data: {
                 label: nodeName,
+                routeTableName: lineageEntityRouteTableName(dp),
                 layer,
                 description,
                 entityId: nodeId,
@@ -768,7 +786,7 @@ const LineageGraphContent = ({ entityId, tableName }: LineageGraphTabProps) => {
       console.error('Error loading lineage:', error);
       setInitialLoading(false);
     }
-  }, [entityId, tableName, config]);
+  }, [entityId, tableName, routeTableName, config]);
 
   useEffect(() => {
     loadInitialLineage();

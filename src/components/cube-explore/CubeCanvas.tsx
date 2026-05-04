@@ -32,13 +32,20 @@ export type JoinType = 'inner' | 'full';
 export interface TableNodeData extends Record<string, unknown> {
   label: string;
   catalog?: string;
-  schema?: string;
+  database?: string;
   table?: string;
   type: 'table' | 'sql';
   sql?: string;
   sqlFields?: string[];
   primaryKeys?: string[];
   modelType?: ModelType;
+}
+
+/** 中间层：优先 `database`，兼容持久化/旧拖放中的 `schema`。 */
+export function tableNodeDatabase(d: TableNodeData): string | undefined {
+  if (typeof d.database === 'string' && d.database.trim()) return d.database;
+  const legacy = (d as Record<string, unknown>)['schema'];
+  return typeof legacy === 'string' && legacy.trim() ? legacy : undefined;
 }
 
 export interface JoinEdgeData extends Record<string, unknown> {
@@ -138,20 +145,26 @@ function CubeCanvasContent({ nodes, setNodes, edges, setEdges, onViewportChange,
       const data = event.dataTransfer.getData('application/json');
       if (!data) return;
 
-      const parsedData = JSON.parse(data);
+      const parsedData = JSON.parse(data) as {
+        catalog?: string;
+        database?: string;
+        schema?: string;
+        table?: string;
+      };
       const position = screenToFlowPosition({
         x: event.clientX,
         y: event.clientY,
       });
+      const database = parsedData.database ?? parsedData.schema;
 
       const newNode: Node<TableNodeData> = {
         id: `table-${Date.now()}`,
         type: 'tableNode',
         position,
         data: {
-          label: parsedData.table,
+          label: parsedData.table ?? '',
           catalog: parsedData.catalog,
-          schema: parsedData.schema,
+          database,
           table: parsedData.table,
           type: 'table',
         },
@@ -214,11 +227,12 @@ function CubeCanvasContent({ nodes, setNodes, edges, setEdges, onViewportChange,
       return { fields: node.data.sqlFields || [], tableName: node.data.table || node.data.label };
     }
     // Table node: load from API
-    if (!node.data.catalog || !node.data.schema || !node.data.table) {
+    const dbLayer = tableNodeDatabase(node.data);
+    if (!node.data.catalog || !dbLayer || !node.data.table) {
       return { fields: [], tableName: node.data.label };
     }
     try {
-      const response = await gravitinoAPI.getTableDetail(node.data.catalog, node.data.schema, node.data.table);
+      const response = await gravitinoAPI.getTableDetail(node.data.catalog, dbLayer, node.data.table);
       return {
         fields: response.table.columns.map(col => col.name),
         tableName: node.data.table,
@@ -264,6 +278,7 @@ function CubeCanvasContent({ nodes, setNodes, edges, setEdges, onViewportChange,
       };
       const borderColor = currentModelType === 'fact' ? 'border-amber-400' : 'border-blue-300';
       const bgColor = currentModelType === 'fact' ? 'bg-amber-50' : 'bg-white';
+      const dbLayer = tableNodeDatabase(data);
       return (
         <div className={`px-4 py-3 ${bgColor} border-2 ${borderColor} rounded-lg shadow-sm min-w-[200px]`}>
           <Handle type="target" position={Position.Left} className="!bg-blue-400 !w-2 !h-2" />
@@ -271,9 +286,9 @@ function CubeCanvasContent({ nodes, setNodes, edges, setEdges, onViewportChange,
             <TableIcon className={`size-4 ${currentModelType === 'fact' ? 'text-amber-500' : 'text-blue-500'}`} />
             <div className="text-sm font-medium text-gray-800">{data.label}</div>
           </div>
-          {data.catalog && data.schema && (
+          {data.catalog && dbLayer && (
             <div className="text-xs text-gray-500 mb-2">
-              {data.catalog}.{data.schema}
+              {data.catalog}.{dbLayer}
             </div>
           )}
           <div className="inline-flex rounded-md shadow-sm">

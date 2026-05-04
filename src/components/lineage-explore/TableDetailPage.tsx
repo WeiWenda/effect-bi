@@ -4,6 +4,12 @@ import { ArrowLeft, Table as TableIcon, ChevronUp, ChevronDown } from 'lucide-re
 import { DDLTab } from './DDLTab';
 import { LineageGraphTab } from './LineageGraphTab';
 import { lineageAPI } from '../../services/lineageApi';
+import {
+  lineageEntityRouteTableName,
+  lineageTableDescription,
+  lineageTableDisplayName,
+  lineageTableLayer,
+} from '../../services/lineageNodeMeta';
 
 type TabType = 'ddl' | 'lineage';
 
@@ -19,6 +25,7 @@ export function TableDetailPage(): React.JSX.Element {
   });
   const [tableData, setTableData] = useState<{
     tableName: string;
+    routeTableName: string;
     description: string;
     layer: string;
     ddl: string;
@@ -34,11 +41,13 @@ export function TableDetailPage(): React.JSX.Element {
         if (tableName) {
           // Fetch entity by table name
           const { entity } = await lineageAPI.getEntityByTableName(tableName);
+          const p = entity.properties;
           setTableData({
-            tableName: entity.properties.table_name || entity.properties.name || 'Unknown',
-            description: entity.properties.description || entity.properties.comment || '',
-            layer: entity.properties.layer || entity.properties.tier || 'Unknown',
-            ddl: entity.properties.ddl || '',
+            tableName: lineageTableDisplayName(p),
+            routeTableName: lineageEntityRouteTableName(p),
+            description: lineageTableDescription(p),
+            layer: lineageTableLayer(p),
+            ddl: typeof p.ddl === 'string' ? p.ddl : '',
             entityId: entity.id,
           });
         } else {
@@ -167,7 +176,11 @@ export function TableDetailPage(): React.JSX.Element {
           <div className="flex-1 overflow-auto">
             {activeTab === 'ddl' && <DDLTab ddl={tableData.ddl} />}
             {activeTab === 'lineage' && (
-              <LineageGraphTab entityId={tableData.entityId} tableName={tableData.tableName} />
+              <LineageGraphTab
+                entityId={tableData.entityId}
+                tableName={tableData.tableName}
+                routeTableName={tableData.routeTableName}
+              />
             )}
           </div>
         </div>

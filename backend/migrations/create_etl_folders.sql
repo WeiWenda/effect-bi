@@ -29,7 +29,7 @@ BEGIN
   END IF;
 END $$;
 
--- One row per logical task name (matches etl_task_versions.name); folder may be NULL = 未归类
+-- One row per logical task name (matches etl_task_info.name); folder may be NULL = 未归类
 CREATE TABLE IF NOT EXISTS etl_folder_tasks (
   id SERIAL PRIMARY KEY,
   folder_id INTEGER REFERENCES etl_folders(id) ON DELETE SET NULL,
@@ -72,5 +72,5 @@ WHERE NOT EXISTS (SELECT 1 FROM etl_folders);
 -- Backfill placement for existing logical task names
 INSERT INTO etl_folder_tasks (folder_id, task_name, sort_order)
 SELECT (SELECT id FROM etl_folders ORDER BY id LIMIT 1), x.name, 0
-FROM (SELECT DISTINCT name FROM etl_task_versions) AS x
+FROM (SELECT DISTINCT i.name FROM etl_task_info i INNER JOIN etl_task_versions v ON v.etl_task_id = i.id) AS x
 ON CONFLICT (task_name) DO NOTHING;

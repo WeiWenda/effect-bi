@@ -6,20 +6,19 @@ CREATE TABLE IF NOT EXISTS cube_versions (
   is_published BOOLEAN DEFAULT false,
   canvas_data JSONB NOT NULL DEFAULT '{}',
   field_list JSONB NOT NULL DEFAULT '[]',
-  yaml_content TEXT NOT NULL DEFAULT '',
+  model_json JSONB NOT NULL DEFAULT '[]',
+  model_yml TEXT NOT NULL DEFAULT '',
+  model_view TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Only one published version per cube name
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cube_versions_published
   ON cube_versions(name) WHERE is_published = true;
 
--- Index for listing versions by name in reverse chronological order
 CREATE INDEX IF NOT EXISTS idx_cube_versions_name_created
   ON cube_versions(name, created_at DESC);
 
--- Trigger to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_cube_versions_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN

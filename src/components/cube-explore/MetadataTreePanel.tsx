@@ -6,10 +6,20 @@ import { gravitinoAPI } from '../../services/gravitinoApi';
 interface TreeNode {
   id: string;
   name: string;
-  type: 'catalog' | 'schema' | 'table';
+  type: 'catalog' | 'database' | 'table';
   children?: TreeNode[];
   expanded?: boolean;
   loading?: boolean;
+}
+
+/** 兼容旧版 localforage 中 type 为 schema 的节点 */
+function normalizeCachedTreeNode(n: TreeNode): TreeNode {
+  const t = (n.type as string) === 'schema' ? ('database' as const) : n.type;
+  return {
+    ...n,
+    type: t,
+    children: n.children?.map(normalizeCachedTreeNode),
+  };
 }
 
 const TREE_STORE = localforage.createInstance({ name: 'metadataTree', storeName: 'treeStructure' });
@@ -81,7 +91,8 @@ export function MetadataTreePanel(): React.JSX.Element {
       setError(null);
       const cachedTree = await TREE_STORE.getItem<TreeNode[]>(TREE_KEY);
       if (cachedTree && cachedTree.length > 0) {
-        const restored = await restoreTreeFromCache(cachedTree);
+        const normalized = cachedTree.map(normalizeCachedTreeNode);
+        const restored = await restoreTreeFromCache(normalized);
         setTreeData(restored);
         setLoading(false);
         return;
@@ -138,30 +149,30 @@ export function MetadataTreePanel(): React.JSX.Element {
     }
   };
 
-  const fetchSchemas = async (catalogNode: TreeNode): Promise<TreeNode[]> => {
+  const fetchDatabases = async (catalogNode: TreeNode): Promise<TreeNode[]> => {
     const catalogName = catalogNode.name;
     const response = await gravitinoAPI.listSchemas(catalogName);
-    const schemaNodes: TreeNode[] = response.identifiers.map(schema => ({
-      id: `schema-${catalogName}-${schema.name}`,
-      name: schema.name,
-      type: 'schema' as const,
+    const databaseNodes: TreeNode[] = response.identifiers.map(ns => ({
+      id: `database-${catalogName}-${ns.name}`,
+      name: ns.name,
+      type: 'database' as const,
       children: [],
       expanded: false,
     }));
-    await saveChildrenCache(catalogNode.id, schemaNodes);
-    return schemaNodes;
+    await saveChildrenCache(catalogNode.id, databaseNodes);
+    return databaseNodes;
   };
 
-  const fetchTables = async (schemaNode: TreeNode, catalogName: string): Promise<TreeNode[]> => {
-    const schemaName = schemaNode.name;
-    const response = await gravitinoAPI.listTables(catalogName, schemaName);
+  const fetchTables = async (databaseNode: TreeNode, catalogName: string): Promise<TreeNode[]> => {
+    const databaseName = databaseNode.name;
+    const response = await gravitinoAPI.listTables(catalogName, databaseName);
     const tableNodes: TreeNode[] = response.identifiers.map(table => ({
-      id: `table-${catalogName}-${schemaName}-${table.name}`,
+      id: `table-${catalogName}-${databaseName}-${table.name}`,
       name: table.name,
       type: 'table' as const,
       children: [],
     }));
-    await saveChildrenCache(schemaNode.id, tableNodes);
+    await saveChildrenCache(databaseNode.id, tableNodes);
     return tableNodes;
   };
 
@@ -171,8 +182,8 @@ export function MetadataTreePanel(): React.JSX.Element {
       return cached;
     }
     if (node.type === 'catalog') {
-      return fetchSchemas(node);
-    } else if (node.type === 'schema') {
+      return fetchDatabases(node);
+    } else if (node.type === 'database') {
       return fetchTables(node, catalogName!);
     }
     return null;
@@ -210,7 +221,7 @@ export function MetadataTreePanel(): React.JSX.Element {
     try {
       let newChildren: TreeNode[];
       if (node.type === 'catalog') {
-        newChildren = await fetchSchemas(node);
+        newChildren = await fetchDatabases(node);
       } else {
         newChildren = await fetchTables(node, catalogName!);
       }
@@ -236,8 +247,8 @@ export function MetadataTreePanel(): React.JSX.Element {
     });
   };
 
-  const renderNode = (node: TreeNode, catalogName?: string, schemaName?: string, level: number = 0): React.JSX.Element => {
-    const Icon = node.type === 'catalog' ? DatabaseIcon : node.type === 'schema' ? FolderIcon : TableIcon;
+  const renderNode = (node: TreeNode, catalogName?: string, databaseName?: string, level: number = 0): React.JSX.Element => {
+    const Icon = node.type === 'catalog' ? DatabaseIcon : node.type === 'database' ? FolderIcon : TableIcon;
     const isLeaf = node.type === 'table';
     const hasChildren = node.children && node.children.length > 0;
     const isExpanded = node.expanded;
@@ -255,7 +266,7 @@ export function MetadataTreePanel(): React.JSX.Element {
               e.dataTransfer.setData('application/json', JSON.stringify({
                 type: 'table',
                 catalog: catalogName,
-                schema: schemaName,
+                database: databaseName,
                 table: node.name,
               }));
             }
@@ -272,7 +283,7 @@ export function MetadataTreePanel(): React.JSX.Element {
               )}
             </span>
           )}
-          <Icon className={`size-4 shrink-0 ${node.type === 'catalog' ? 'text-blue-500' : node.type === 'schema' ? 'text-yellow-500' : 'text-green-500'}`} />
+          <Icon className={`size-4 shrink-0 ${node.type === 'catalog' ? 'text-blue-500' : node.type === 'database' ? 'text-yellow-500' : 'text-green-500'}`} />
           <span className="text-sm text-gray-700 truncate flex-1">{node.name}</span>
           {!isLeaf && (
             <button
@@ -286,7 +297,7 @@ export function MetadataTreePanel(): React.JSX.Element {
         </div>
         {isExpanded && hasChildren && (
           <div>
-            {node.children!.map(child => renderNode(child, node.type === 'catalog' ? node.name : catalogName, node.type === 'schema' ? node.name : schemaName, level + 1))}
+            {node.children!.map(child => renderNode(child, node.type === 'catalog' ? node.name : catalogName, node.type === 'database' ? node.name : databaseName, level + 1))}
           </div>
         )}
       </div>

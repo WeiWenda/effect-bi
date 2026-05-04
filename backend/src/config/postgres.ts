@@ -1,7 +1,10 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
 
-dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(__dirname, '../../.env') });
 
 const pool = new Pool({
   host: process.env.PG_HOST || 'localhost',

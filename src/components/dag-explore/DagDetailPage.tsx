@@ -16,6 +16,11 @@ import '@xyflow/react/dist/style.css';
 import Editor from '@monaco-editor/react';
 import { dagAPI, DagView } from '../../services/dagApi';
 import { lineageAPI } from '../../services/lineageApi';
+import {
+  lineageTableDescription,
+  lineageTableDisplayName,
+  lineageTableLayer,
+} from '../../services/lineageNodeMeta';
 import { fileAPI } from '../../services/fileApi';
 import { TaskOperationsTable } from './TaskOperationsTable';
 import ELK from 'elkjs/lib/elk.bundled.js';
@@ -207,9 +212,16 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
       response.paths.forEach((path) => {
         // Add nodes
         path.nodes.forEach((lineageNode) => {
-          const nodeName = lineageNode.properties.table_name || lineageNode.properties.name || 'Unknown';
-          const layer = lineageNode.properties.layer || lineageNode.properties.tier;
-          const description = lineageNode.properties.description || lineageNode.properties.comment || '';
+          const p = lineageNode.properties as Record<string, unknown>;
+          const nodeName = lineageTableDisplayName(p);
+          const layer = lineageTableLayer(p);
+          const description = lineageTableDescription(p);
+          const tf =
+            typeof p.task_file === 'string' && p.task_file.trim()
+              ? p.task_file.trim()
+              : typeof p.AIRFLOW_DAG_ID === 'string' && p.AIRFLOW_DAG_ID.trim()
+                ? p.AIRFLOW_DAG_ID.trim()
+                : undefined;
 
           if (!nodeMap.has(lineageNode.id)) {
             const newNode: Node = {
@@ -222,7 +234,7 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
                 description,
                 entityId: lineageNode.id,
                 focused: false,
-                taskFile: lineageNode.properties.task_file || lineageNode.properties.taskFile,
+                taskFile: tf ?? (typeof p.taskFile === 'string' ? p.taskFile : undefined),
               },
             };
             nodeMap.set(lineageNode.id, newNode);

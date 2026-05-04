@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 一键启停：Vite 前端、Node 主后端、ETL DAG Python（FastAPI）服务。
+# 一键启停：Vite 前端、Node 主后端（ETL DAG 由后端进程内生成并可选写入 AIRFLOW_HOME/dags）。
 #
 # 用法:
 #   ./scripts/dev-services.sh start|stop|restart|status
@@ -9,7 +9,6 @@
 # 可选环境变量:
 #   FRONTEND_PORT   默认 5173
 #   BACKEND_PORT    Node 监听端口，默认 8000（与 vite.config.ts 里 /api proxy 一致；若用 3001 请 export BACKEND_PORT=3001 并改 proxy）
-#   ETL_DAG_PY_PORT 默认 8790
 #
 # PID 与日志目录: <repo>/.dev-pids/
 #
@@ -21,9 +20,7 @@ PID_DIR="$ROOT/.dev-pids"
 mkdir -p "$PID_DIR"
 
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
-BACKEND_PORT="${BACKEND_PORT:-8000}"
-ETL_DAG_PY_PORT="${ETL_DAG_PY_PORT:-8790}"
-
+BACKEND_PORT="${BACKEND_PORT:-3001}"
 log() { echo "[dev-services] $*"; }
 
 is_running() {
@@ -73,7 +70,6 @@ stop_one() {
 cmd_stop() {
   log "停止全部服务…"
   stop_one "vite"
-  stop_one "etl-dag-service"
   stop_one "node-backend"
   log "已全部停止。"
 }
@@ -97,23 +93,6 @@ cmd_start() {
     log "node-backend pid=$(cat "$PID_DIR/node-backend.pid") 日志: $PID_DIR/node-backend.log"
   fi
 
-  p=$(read_pid "etl-dag-service")
-  if is_running "$p"; then
-    log "etl-dag-service 已在运行 (pid=${p})，跳过。"
-  else
-    log "启动 etl-dag-service (port=${ETL_DAG_PY_PORT})…"
-    (
-      cd "$ROOT/services/etl-dag-service"
-      if [[ -x "$ROOT/services/etl-dag-service/.venv/bin/python" ]]; then
-        exec "$ROOT/services/etl-dag-service/.venv/bin/python" -m uvicorn app.main:app --host 127.0.0.1 --port "$ETL_DAG_PY_PORT"
-      else
-        exec python3 -m uvicorn app.main:app --host 127.0.0.1 --port "$ETL_DAG_PY_PORT"
-      fi
-    ) >>"$PID_DIR/etl-dag-service.log" 2>&1 &
-    echo $! >"$PID_DIR/etl-dag-service.pid"
-    log "etl-dag-service pid=$(cat "$PID_DIR/etl-dag-service.pid") 日志: $PID_DIR/etl-dag-service.log"
-  fi
-
   p=$(read_pid "vite")
   if is_running "$p"; then
     log "vite 已在运行 (pid=${p})，跳过。"
@@ -127,11 +106,11 @@ cmd_start() {
     log "vite pid=$(cat "$PID_DIR/vite.pid") 日志: $PID_DIR/vite.log"
   fi
 
-  log "完成。前端 http://127.0.0.1:${FRONTEND_PORT}/  ·  Node API http://127.0.0.1:${BACKEND_PORT}/  ·  ETL DAG 服务 http://127.0.0.1:${ETL_DAG_PY_PORT}/docs"
+  log "完成。前端 http://127.0.0.1:${FRONTEND_PORT}/  ·  Node API http://127.0.0.1:${BACKEND_PORT}/"
 }
 
 cmd_status() {
-  for name in node-backend etl-dag-service vite; do
+  for name in node-backend vite; do
     local pid
     pid=$(read_pid "$name")
     if [[ -z "$pid" ]]; then

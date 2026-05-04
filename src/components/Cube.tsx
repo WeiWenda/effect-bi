@@ -4,7 +4,7 @@ import { Node, Edge } from '@xyflow/react';
 import { DatabaseIcon, EyeIcon, HistoryIcon, ChevronLeftIcon, BarChart3Icon } from 'lucide-react';
 import yaml from 'js-yaml';
 import { MetadataTreePanel } from './cube-explore/MetadataTreePanel';
-import { CubeCanvas, TableNodeData, JoinEdgeData } from './cube-explore/CubeCanvas';
+import { CubeCanvas, TableNodeData, JoinEdgeData, tableNodeDatabase } from './cube-explore/CubeCanvas';
 import { FieldListPanel, FieldItem } from './cube-explore/FieldListPanel';
 import { YamlPreviewDialog } from './cube-explore/YamlPreviewDialog';
 import { VersionManageDialog } from './cube-explore/VersionManageDialog';
@@ -58,11 +58,11 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
   const draggingRef = useRef(false);
 
   const tableNodes = useMemo(() => nodes
-    .filter(n => (n.data.type === 'table' && n.data.catalog && n.data.schema && n.data.table) || (n.data.type === 'sql' && n.data.table))
+    .filter(n => (n.data.type === 'table' && n.data.catalog && tableNodeDatabase(n.data) && n.data.table) || (n.data.type === 'sql' && n.data.table))
     .map(n => ({
       id: n.id,
       catalog: n.data.catalog || '',
-      schema: n.data.schema || '',
+      database: tableNodeDatabase(n.data) || '',
       table: n.data.table!,
       type: n.data.type,
       sql: n.data.sql,
@@ -136,7 +136,7 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
     if (nodes.length === 0 || fields.filter(f => f.isOutput).length === 0) {
       return { modelJson: JSON.stringify({ error: 'No tables or output fields configured yet' }, null, 2), modelYml: '', modelView: '' };
     }
-    const tableNodes = nodes.filter(n => (n.data.type === 'table' && n.data.catalog && n.data.schema && n.data.table) || (n.data.type === 'sql' && n.data.table));
+    const tableNodes = nodes.filter(n => (n.data.type === 'table' && n.data.catalog && tableNodeDatabase(n.data) && n.data.table) || (n.data.type === 'sql' && n.data.table));
     if (tableNodes.length === 0) {
       return { modelJson: JSON.stringify({ error: 'No valid table nodes found' }, null, 2), modelYml: '', modelView: '' };
     }
@@ -206,7 +206,7 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
         name: cName, title: tn.data.table,
         ...(isSqlNode
           ? { description: `Cube for SQL: ${tn.data.table}`, sql: tn.data.sql }
-          : { description: `Cube for ${tn.data.schema}.${tn.data.table}`, sql_table: `${tn.data.schema}.${tn.data.table}` }
+          : { description: `Cube for ${tableNodeDatabase(tn.data)}.${tn.data.table}`, sql_table: `${tableNodeDatabase(tn.data)}.${tn.data.table}` }
         ),
         measures, dimensions,
         ...(Object.keys(joins).length > 0 && { joins }),

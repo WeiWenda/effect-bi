@@ -20,29 +20,37 @@ import {
   type EtlTabKindPersisted,
   type EtlTaskTypePersisted,
 } from '../../utils/etlWorkspaceStorage';
+import { parseAlertRulesFromJsonText } from '../../utils/etlAlertRules';
+import { migrateLegacyGraphJsonTextToRuntimeDeps } from '../../utils/etlRuntimeDeps';
+import { migrateTaskOutputPersisted, type EtlTaskOutputPersisted } from '../../utils/etlWorkspaceStorage';
 
 const VALID_ETL_TASK_TYPES: EtlTaskTypePersisted[] = ['hsql', 'data_import', 'data_export'];
 
 function mapVersionToTaskBody(v: EtlTaskVersion, etlTaskType: EtlTaskTypePersisted): EtlTaskDevTabPersistedBody {
-  const ao = (v.airflowOptionsJson || {}) as Record<string, unknown>;
-  const graphText =
-    typeof v.graphJson === 'string' ? v.graphJson : JSON.stringify(v.graphJson ?? {}, null, 2);
+  const sched = (v.scheduleJson || {}) as Record<string, unknown>;
+  const runtimeDepsJsonText = JSON.stringify(v.runtimeDepsJson ?? { runtimeDependencies: [] }, null, 2);
   const qrText =
     typeof v.qualityRulesJson === 'string'
       ? v.qualityRulesJson
-      : JSON.stringify(v.qualityRulesJson ?? [], null, 2);
+      : JSON.stringify(v.qualityRulesJson ?? { sqlQueries: [], rules: [] }, null, 2);
+  const alertSrc =
+    v.alertJson && typeof v.alertJson === 'object' ? JSON.stringify(v.alertJson) : '{"rules":[]}';
+  const alertBundle = parseAlertRulesFromJsonText(alertSrc);
+  const alertRulesJson = JSON.stringify(alertBundle, null, 2);
+  const taskOutput = migrateTaskOutputPersisted(v.taskOutput);
   return {
     kind: 'task-dev',
     etlTaskType,
     taskName: v.name,
     remark: v.remark ?? '',
     sqlMain: v.sqlMain,
-    owner: typeof ao.owner === 'string' ? ao.owner : 'etl',
-    retries: typeof ao.retries === 'number' ? ao.retries : 1,
-    retryDelayMinutes: typeof ao.retryDelayMinutes === 'number' ? ao.retryDelayMinutes : 5,
-    emailOnFailure: Boolean(ao.emailOnFailure),
+    cronExpression: typeof sched.cronExpression === 'string' ? sched.cronExpression : '',
+    retries: typeof sched.retries === 'number' ? sched.retries : 1,
+    retryDelayMinutes: typeof sched.retryDelayMinutes === 'number' ? sched.retryDelayMinutes : 5,
+    alertRulesJson,
     qualityRulesJson: qrText,
-    graphJsonText: graphText,
+    runtimeDepsJsonText,
+    taskOutput,
     lastVersionId: v.id,
     dryResult: null,
   };
@@ -124,17 +132,31 @@ export function EtlWorkspace(): React.JSX.Element {
           if (!bodies[t.id]) {
             bodies[t.id] = defaultBodyForTabKind(t.kind);
           } else if (bodies[t.id].kind === 'task-dev') {
-            const raw = bodies[t.id] as EtlTaskDevTabPersistedBody & { targetFolderId?: number | null };
+            const raw = bodies[t.id] as EtlTaskDevTabPersistedBody & { targetFolderId?: number | null; graphJsonText?: string };
             const { targetFolderId: _removed, ...rest } = raw;
             const rawType = rest.etlTaskType;
             const etlTaskType =
               rawType && VALID_ETL_TASK_TYPES.includes(rawType as EtlTaskTypePersisted)
                 ? (rawType as EtlTaskTypePersisted)
                 : 'hsql';
+            const rawTd = rest as Partial<EtlTaskDevTabPersistedBody> & { graphJsonText?: string };
+            const base = defaultTaskDevBody();
+            const legacyGraph = rawTd.graphJsonText;
+            const runtimeDepsJsonText =
+              typeof rawTd.runtimeDepsJsonText === 'string' && rawTd.runtimeDepsJsonText.trim()
+                ? rawTd.runtimeDepsJsonText
+                : typeof legacyGraph === 'string'
+                  ? migrateLegacyGraphJsonTextToRuntimeDeps(legacyGraph)
+                  : base.runtimeDepsJsonText;
+            const taskOutput: EtlTaskOutputPersisted = migrateTaskOutputPersisted(rawTd.taskOutput ?? null);
             const td: EtlTaskDevTabPersistedBody = {
-              ...defaultTaskDevBody(),
+              ...base,
               ...rest,
               etlTaskType,
+              cronExpression: typeof rawTd.cronExpression === 'string' ? rawTd.cronExpression : base.cronExpression,
+              alertRulesJson: typeof rawTd.alertRulesJson === 'string' ? rawTd.alertRulesJson : base.alertRulesJson,
+              runtimeDepsJsonText,
+              taskOutput,
             };
             bodies[t.id] = td;
           }
@@ -238,30 +260,39 @@ export function EtlWorkspace(): React.JSX.Element {
       const name = payload.taskName.trim();
       if (payload.etlTaskType !== 'hsql') throw new Error('unsupported type');
       const def = defaultTaskDevBody();
-      let graphJson: unknown = {};
+      let runtimeDepsJson: Record<string, unknown> = { runtimeDependencies: [] };
+      try {
+        runtimeDepsJson = JSON.parse(def.runtimeDepsJsonText || '{}') as Record<string, unknown>;
+      } catch {
+        runtimeDepsJson = { runtimeDependencies: [] };
+      }
       let qualityRulesJsonParsed: unknown = [];
       try {
-        graphJson = JSON.parse(def.graphJsonText || '{}');
+        qualityRulesJsonParsed = JSON.parse(def.qualityRulesJson || '{}');
       } catch {
-        graphJson = {};
+        qualityRulesJsonParsed = { sqlQueries: [], rules: [] };
       }
       try {
-        qualityRulesJsonParsed = JSON.parse(def.qualityRulesJson || '[]');
-      } catch {
-        qualityRulesJsonParsed = [];
-      }
-      try {
+        let alertRulesParsed: unknown[] = [];
+        try {
+          const ar = JSON.parse(def.alertRulesJson || '{}') as { rules?: unknown[] };
+          alertRulesParsed = Array.isArray(ar.rules) ? ar.rules : [];
+        } catch {
+          alertRulesParsed = [];
+        }
         const { version } = await etlAPI.saveTaskVersion({
           name,
           remark: '',
           sqlMain: def.sqlMain,
-          graphJson,
-          airflowOptionsJson: {
-            owner: def.owner,
+          scheduleJson: {
+            owner: 'etl',
+            emailOnFailure: false,
+            cronExpression: def.cronExpression.trim() || '0 0 * * *',
             retries: def.retries,
             retryDelayMinutes: def.retryDelayMinutes,
-            emailOnFailure: def.emailOnFailure,
           },
+          alertJson: { rules: alertRulesParsed },
+          runtimeDepsJson,
           qualityRulesJson: qualityRulesJsonParsed,
           folderId: ctx.folderId,
         });

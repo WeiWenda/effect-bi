@@ -10,9 +10,16 @@ interface CreateDashboardDialogProps {
   open: boolean;
   onClose: () => void;
   onCreated: (dashboard: DashboardInfo) => void;
+  /** 打开时预选的所属文件夹（根目录「新建看板」传 null） */
+  initialFolderId?: number | null;
 }
 
-export function CreateDashboardDialog({ open, onClose, onCreated }: CreateDashboardDialogProps): React.JSX.Element {
+export function CreateDashboardDialog({
+  open,
+  onClose,
+  onCreated,
+  initialFolderId = null,
+}: CreateDashboardDialogProps): React.JSX.Element {
   const [folders, setFolders] = useState<DashboardFolder[]>([]);
   const [name, setName] = useState('');
   const [folderId, setFolderId] = useState<number | null>(null);
@@ -21,10 +28,10 @@ export function CreateDashboardDialog({ open, onClose, onCreated }: CreateDashbo
   useEffect(() => {
     if (open) {
       setName('');
-      setFolderId(null);
+      setFolderId(initialFolderId ?? null);
       folderAPI.list().then(setFolders).catch(() => {});
     }
-  }, [open]);
+  }, [open, initialFolderId]);
 
   const handleCreate = async () => {
     if (!name.trim()) return;

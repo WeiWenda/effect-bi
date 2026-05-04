@@ -13,11 +13,8 @@ async function runMigration() {
   const migrationsDir = path.join(__dirname, '../migrations');
   const migrationFiles = [
     'create_dag_views.sql',
-    'create_task_instances.sql',
-    'create_task_info.sql',
+    'create_etl_task_info.sql',
     'create_cube_versions.sql',
-    'alter_cube_versions_add_model_fields.sql',
-    'alter_task_instances_add_id.sql',
     'create_charts.sql',
     'create_dashboard_folders.sql',
     'create_dashboards.sql',
@@ -25,8 +22,12 @@ async function runMigration() {
     'create_etl_adhoc.sql',
     'create_etl_task_versions.sql',
     'create_etl_airflow_deployments.sql',
-    'create_etl_folders.sql'
-  ];
+    'drop_etl_airflow_deployments_dag_file_path.sql',
+    'create_etl_folders.sql',
+    'create_etl_table_partition_detail.sql',
+    'create_etl_task_run_instances.sql',
+    'create_etl_alert_dispatch.sql'
+    ];
 
   const client = await pool.connect();
   try {

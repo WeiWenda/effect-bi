@@ -1,6 +1,6 @@
+import './loadEnv.js';
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { closeDriver } from './config/neo4j.js';
 import lineageRoutes from './routes/lineage.js';
 import dagRoutes from './routes/dag.js';
@@ -11,8 +11,6 @@ import chartRoutes from './routes/chart.js';
 import dashboardRoutes from './routes/dashboard.js';
 import cubeProxyRoutes from './routes/cubeProxy.js';
 import etlRoutes from './routes/etl.js';
-
-dotenv.config();
 
 const app: Express = express();
 const PORT = process.env.PORT || 3001;

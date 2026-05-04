@@ -5,7 +5,7 @@ import { gravitinoAPI, ColumnInfo } from '../../services/gravitinoApi';
 interface TableNodeInfo {
   id: string;
   catalog: string;
-  schema: string;
+  database: string;
   table: string;
   type: 'table' | 'sql';
   sql?: string;
@@ -76,7 +76,7 @@ export function FieldListPanel({ tableNodes, fields, setFields }: FieldListPanel
             continue;
           }
           // Table node: load from API
-          const response = await gravitinoAPI.getTableDetail(node.catalog, node.schema, node.table);
+          const response = await gravitinoAPI.getTableDetail(node.catalog, node.database, node.table);
           // Extract primary key field names from indexes
           const primaryKeyFields = new Set<string>();
           if (response.table.indexes) {

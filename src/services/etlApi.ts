@@ -25,14 +25,26 @@ export interface AdhocSubmission {
   resultPreviewJson?: unknown;
 }
 
+export interface EtlTaskOutput {
+  catalogName: string;
+  databaseName: string;
+  tableName: string;
+}
+
 export interface EtlTaskVersion {
   id: number;
   name: string;
   remark: string;
   isPublished: boolean;
-  graphJson: unknown;
   sqlMain: string;
-  airflowOptionsJson: Record<string, unknown>;
+  /** 调度：crontab、重试、owner 等 */
+  scheduleJson: Record<string, unknown>;
+  /** 任务报警：{ rules: [...] } */
+  alertJson: Record<string, unknown>;
+  /** 运行依赖：{ runtimeDependencies: [...] } */
+  runtimeDepsJson: Record<string, unknown>;
+  /** 产出表（存 etl_task_info） */
+  taskOutput: EtlTaskOutput;
   qualityRulesJson: unknown;
   createdAt: string;
   updatedAt: string;
@@ -61,7 +73,6 @@ export interface EtlAirflowDeployment {
   etlTaskVersionId: number;
   airflowDagId: string;
   logicalTaskName: string;
-  dagFilePath: string | null;
   generator: string;
   createdAt: string;
 }
@@ -173,6 +184,15 @@ export const etlAPI = {
     return response.data;
   },
 
+  /** 产出表写入 etl_task_info，与版本无关；会先确保任务行存在 */
+  patchTaskOutput: async (
+    name: string,
+    taskOutput: EtlTaskOutput
+  ): Promise<{ taskOutput: EtlTaskOutput }> => {
+    const response = await axios.patch(`${ETL_API_BASE_URL}/tasks/output`, { name, taskOutput });
+    return response.data;
+  },
+
   listTaskVersions: async (name: string): Promise<{ versions: EtlTaskVersion[] }> => {
     const response = await axios.get(`${ETL_API_BASE_URL}/tasks/versions`, { params: { name } });
     return response.data;
@@ -192,9 +212,12 @@ export const etlAPI = {
     name: string;
     remark?: string;
     sqlMain: string;
-    graphJson?: unknown;
-    airflowOptionsJson?: Record<string, unknown>;
+    scheduleJson?: Record<string, unknown>;
+    alertJson?: Record<string, unknown>;
+    runtimeDepsJson?: Record<string, unknown>;
     qualityRulesJson?: unknown;
+    /** 产出表请使用 patchTaskOutput，勿随版本保存 */
+    taskOutput?: EtlTaskOutput;
     /** 省略则不在保存时改目录；传 null 表示未归类 */
     folderId?: number | null;
   }): Promise<{ version: EtlTaskVersion }> => {

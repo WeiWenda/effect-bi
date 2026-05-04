@@ -4,15 +4,15 @@ import { Button } from '../ui/button';
 import { SaveIcon, UploadIcon, Loader2Icon, Trash2Icon } from 'lucide-react';
 import { useToast } from '../ui/toast';
 import { etlAPI, type EtlTaskVersion } from '../../services/etlApi';
-
+import { parseRuntimeDepsObjectFromJsonText } from '../../utils/etlRuntimeDeps';
 export interface EtlTaskDraftSnapshot {
   sqlMain: string;
-  graphJsonText: string;
+  runtimeDepsJsonText: string;
   qualityRulesJson: string;
-  owner: string;
+  cronExpression: string;
   retries: number;
   retryDelayMinutes: number;
-  emailOnFailure: boolean;
+  alertRulesJson: string;
 }
 
 interface EtlTaskVersionManageDialogProps {
@@ -76,18 +76,24 @@ export function EtlTaskVersionManageDialog({
       return;
     }
     const d = getDraft();
-    let graphJson: unknown = {};
     let qualityRulesJsonParsed: unknown = [];
+    const runtimeDepsJson = parseRuntimeDepsObjectFromJsonText(d.runtimeDepsJsonText);
     try {
-      graphJson = JSON.parse(d.graphJsonText || '{}');
+      qualityRulesJsonParsed = JSON.parse(d.qualityRulesJson || '{}');
     } catch {
-      toast('依赖图 JSON 无效', 'error');
+      toast('质检规则 JSON 格式无效', 'error');
       return;
     }
+    if (!d.cronExpression.trim()) {
+      toast('请填写调度时间（crontab 表达式）', 'error');
+      return;
+    }
+    let alertRules: unknown[] = [];
     try {
-      qualityRulesJsonParsed = JSON.parse(d.qualityRulesJson || '[]');
+      const ar = JSON.parse(d.alertRulesJson || '{}') as { rules?: unknown[] };
+      alertRules = Array.isArray(ar.rules) ? ar.rules : [];
     } catch {
-      toast('质检规则 JSON 无效', 'error');
+      toast('任务报警配置 JSON 格式无效', 'error');
       return;
     }
     setSaving(true);
@@ -96,13 +102,15 @@ export function EtlTaskVersionManageDialog({
         name,
         remark: saveRemark.trim(),
         sqlMain: d.sqlMain,
-        graphJson,
-        airflowOptionsJson: {
-          owner: d.owner,
+        scheduleJson: {
+          owner: 'etl',
+          emailOnFailure: false,
+          cronExpression: d.cronExpression.trim(),
           retries: d.retries,
           retryDelayMinutes: d.retryDelayMinutes,
-          emailOnFailure: d.emailOnFailure,
         },
+        alertJson: { rules: alertRules },
+        runtimeDepsJson,
         qualityRulesJson: qualityRulesJsonParsed,
       };
       if (pendingFolderPlacement !== undefined) {

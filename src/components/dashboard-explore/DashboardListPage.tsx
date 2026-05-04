@@ -1,6 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LayoutDashboardIcon, FolderIcon, PlusIcon, Trash2Icon, FolderPlusIcon, ChevronRightIcon, ChevronDownIcon, ListTreeIcon, GripVerticalIcon } from 'lucide-react';
+import {
+  LayoutDashboardIcon,
+  FolderIcon,
+  Trash2Icon,
+  FolderPlusIcon,
+  ChevronRightIcon,
+  ChevronDownIcon,
+  ListTreeIcon,
+  GripVerticalIcon,
+  MoreVerticalIcon,
+} from 'lucide-react';
 import { folderAPI, dashboardAPI } from '../../services/dashboardApi';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Button } from '../ui/button';
@@ -66,11 +76,32 @@ export function DashboardListPage(): React.JSX.Element {
   };
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createDashboardFolderPreset, setCreateDashboardFolderPreset] = useState<number | null>(null);
 
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
+  const [folderDialogMode, setFolderDialogMode] = useState<'create' | 'rename'>('create');
+  const [renameTargetId, setRenameTargetId] = useState<number | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderParentId, setNewFolderParentId] = useState<number | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
+
+  /** 固定定位的文件夹行「更多」菜单 */
+  const [folderMoreMenu, setFolderMoreMenu] = useState<{ folderId: number; top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    if (!folderMoreMenu) return;
+    const close = (e: globalThis.MouseEvent) => {
+      const el = e.target;
+      if (el instanceof Element && el.closest('[data-dashboard-folder-more-menu]')) return;
+      if (el instanceof Element && el.closest('[data-dashboard-folder-more-trigger]')) return;
+      setFolderMoreMenu(null);
+    };
+    const t = window.setTimeout(() => document.addEventListener('mousedown', close, true), 0);
+    return () => {
+      window.clearTimeout(t);
+      document.removeEventListener('mousedown', close, true);
+    };
+  }, [folderMoreMenu]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -104,20 +135,40 @@ export function DashboardListPage(): React.JSX.Element {
     navigate(`/dashboard/${dash.id}`);
   };
 
-  const handleCreateFolder = async () => {
+  const resetFolderDialog = () => {
+    setFolderDialogMode('create');
+    setRenameTargetId(null);
+    setNewFolderName('');
+    setNewFolderParentId(null);
+  };
+
+  const openCreateFolderDialog = (parentId: number | null) => {
+    setFolderDialogMode('create');
+    setRenameTargetId(null);
+    setNewFolderParentId(parentId);
+    setNewFolderName('');
+    setFolderDialogOpen(true);
+  };
+
+  const handleFolderDialogSubmit = async () => {
     if (!newFolderName.trim()) {
       toast('请输入文件夹名称', 'error');
       return;
     }
     setCreatingFolder(true);
     try {
-      await folderAPI.create(newFolderName.trim(), newFolderParentId || undefined);
-      toast('文件夹创建成功', 'success');
+      if (folderDialogMode === 'rename' && renameTargetId != null) {
+        await folderAPI.update(renameTargetId, { name: newFolderName.trim() });
+        toast('重命名成功', 'success');
+      } else {
+        await folderAPI.create(newFolderName.trim(), newFolderParentId || undefined);
+        toast('文件夹创建成功', 'success');
+      }
       setFolderDialogOpen(false);
-      setNewFolderName('');
+      resetFolderDialog();
       await loadData();
     } catch {
-      toast('创建失败', 'error');
+      toast(folderDialogMode === 'rename' ? '重命名失败' : '创建失败', 'error');
     } finally {
       setCreatingFolder(false);
     }
@@ -337,9 +388,15 @@ export function DashboardListPage(): React.JSX.Element {
             }
           }}
         >
-          <div className="shrink-0 cursor-grab"
-            onDragStart={e => { e.stopPropagation(); handleFolderReorderDragStart(e, node.id); }}
+          <div
+            className="shrink-0 cursor-grab"
+            onClick={e => e.stopPropagation()}
+            onDragStart={e => {
+              e.stopPropagation();
+              handleFolderReorderDragStart(e, node.id);
+            }}
             draggable
+            role="presentation"
           >
             <GripVerticalIcon className="size-3.5 text-gray-300 group-hover:text-gray-400" />
           </div>
@@ -348,17 +405,35 @@ export function DashboardListPage(): React.JSX.Element {
           <span className="text-sm text-gray-700 flex-1 truncate">{node.name}</span>
           <span className="text-xs text-gray-400 shrink-0">{totalCount}</span>
           <button
-            onClick={e => { e.stopPropagation(); toggleExpandAll(node.id, !isExpanded || !isAllExpanded(node)); }}
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              toggleExpandAll(node.id, !isExpanded || !isAllExpanded(node));
+            }}
             className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-600 transition-all shrink-0"
             title={isAllExpanded(node) ? '全部折叠' : '全部展开'}
           >
             <ListTreeIcon className="size-3" />
           </button>
           <button
-            onClick={e => { e.stopPropagation(); handleDeleteFolder(node.id); }}
-            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-500 transition-all shrink-0"
+            type="button"
+            data-dashboard-folder-more-trigger
+            onClick={e => {
+              e.stopPropagation();
+              const btn = e.currentTarget;
+              if (folderMoreMenu?.folderId === node.id) {
+                setFolderMoreMenu(null);
+                return;
+              }
+              const rect = btn.getBoundingClientRect();
+              const left = Math.min(rect.left, typeof window !== 'undefined' ? window.innerWidth - 176 : rect.left);
+              setFolderMoreMenu({ folderId: node.id, top: rect.bottom + 4, left });
+            }}
+            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-600 transition-all shrink-0"
+            title="更多"
+            aria-label={`${node.name} 更多操作`}
           >
-            <Trash2Icon className="size-3" />
+            <MoreVerticalIcon className="size-3.5" />
           </button>
         </div>
         {isExpanded && (
@@ -410,13 +485,87 @@ export function DashboardListPage(): React.JSX.Element {
 
   return (
     <div className="h-full flex bg-gray-50">
+      {folderMoreMenu ? (
+        <div
+          data-dashboard-folder-more-menu
+          className="fixed z-[300] min-w-[168px] rounded-md border border-gray-200 bg-white py-1 shadow-lg text-sm"
+          style={{ top: folderMoreMenu.top, left: folderMoreMenu.left }}
+          role="menu"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full text-left px-3 py-2 hover:bg-gray-50 text-gray-800"
+            onClick={() => {
+              setCreateDashboardFolderPreset(folderMoreMenu.folderId);
+              setCreateDialogOpen(true);
+              setFolderMoreMenu(null);
+            }}
+          >
+            创建看板
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full text-left px-3 py-2 hover:bg-gray-50 text-gray-800"
+            onClick={() => {
+              openCreateFolderDialog(folderMoreMenu.folderId);
+              setFolderMoreMenu(null);
+            }}
+          >
+            创建子文件夹
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full text-left px-3 py-2 hover:bg-gray-50 text-gray-800"
+            onClick={() => {
+              const fid = folderMoreMenu.folderId;
+              const row = folders.find(f => f.id === fid);
+              setFolderDialogMode('rename');
+              setRenameTargetId(fid);
+              setNewFolderName(row?.name ?? '');
+              setNewFolderParentId(null);
+              setFolderDialogOpen(true);
+              setFolderMoreMenu(null);
+            }}
+          >
+            重命名
+          </button>
+          <div className="my-1 border-t border-gray-100" />
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600"
+            onClick={() => {
+              const id = folderMoreMenu.folderId;
+              setFolderMoreMenu(null);
+              void handleDeleteFolder(id);
+            }}
+          >
+            删除当前文件夹
+          </button>
+        </div>
+      ) : null}
       {/* Left sidebar - folder tree */}
       <div className="w-72 border-r border-gray-200 bg-white flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
           <h2 className="text-sm font-semibold text-gray-700">看板文件夹</h2>
-          <div className="flex gap-1">
+          <div className="flex items-center gap-0.5">
             <button
-              onClick={() => setFolderDialogOpen(true)}
+              type="button"
+              onClick={() => {
+                setCreateDashboardFolderPreset(null);
+                setCreateDialogOpen(true);
+              }}
+              className="p-1.5 hover:bg-gray-100 rounded text-gray-500 hover:text-gray-700 transition-colors"
+              title="新建看板"
+            >
+              <LayoutDashboardIcon className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => openCreateFolderDialog(null)}
               className="p-1.5 hover:bg-gray-100 rounded text-gray-500 hover:text-gray-700 transition-colors"
               title="新建文件夹"
             >
@@ -435,22 +584,16 @@ export function DashboardListPage(): React.JSX.Element {
 
       {/* Right content - dashboard cards */}
       <div className="flex-1 overflow-auto p-6">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-2">
-            <LayoutDashboardIcon className="size-6 text-blue-600" />
-            <h1 className="text-2xl font-semibold text-gray-800">看板</h1>
-          </div>
-          <Button onClick={() => setCreateDialogOpen(true)}>
-            <PlusIcon className="size-4 mr-2" />
-            新建看板
-          </Button>
+        <div className="flex items-center gap-2 mb-6">
+          <LayoutDashboardIcon className="size-6 text-blue-600" />
+          <h1 className="text-2xl font-semibold text-gray-800">看板</h1>
         </div>
 
         {dashboards.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-gray-400">
             <LayoutDashboardIcon className="size-12 mb-4" />
             <p className="text-lg">暂无看板</p>
-            <p className="text-sm mt-2">点击右上角「新建看板」开始创建</p>
+            <p className="text-sm mt-2">在左侧「看板文件夹」标题栏点击看板图标新建，或在文件夹「更多」里创建</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -481,12 +624,20 @@ export function DashboardListPage(): React.JSX.Element {
         open={createDialogOpen}
         onClose={() => setCreateDialogOpen(false)}
         onCreated={handleCreateDashboard}
+        initialFolderId={createDashboardFolderPreset}
       />
 
-      {/* Create Folder Dialog */}
-      <Dialog open={folderDialogOpen} onOpenChange={setFolderDialogOpen}>
+      <Dialog
+        open={folderDialogOpen}
+        onOpenChange={open => {
+          setFolderDialogOpen(open);
+          if (!open) resetFolderDialog();
+        }}
+      >
         <DialogContent>
-          <DialogHeader><DialogTitle>新建文件夹</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{folderDialogMode === 'rename' ? '重命名文件夹' : '新建文件夹'}</DialogTitle>
+          </DialogHeader>
           <div className="py-4 space-y-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">文件夹名称</label>
@@ -496,26 +647,44 @@ export function DashboardListPage(): React.JSX.Element {
                 onChange={e => setNewFolderName(e.target.value)}
                 placeholder="请输入文件夹名称"
                 className="w-full text-sm border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                onKeyDown={e => { if (e.key === 'Enter') handleCreateFolder(); }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') void handleFolderDialogSubmit();
+                }}
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">父文件夹 (可选)</label>
-              <Select
-                value={newFolderParentId != null ? String(newFolderParentId) : ''}
-                onChange={val => setNewFolderParentId(val ? parseInt(val) : null)}
-                options={[
-                  { value: '', label: '无 (根目录)' },
-                  ...folders.map(f => ({ value: String(f.id), label: f.name })),
-                ]}
-                placeholder="无 (根目录)"
-              />
-            </div>
+            {folderDialogMode === 'create' ? (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">父文件夹 (可选)</label>
+                <Select
+                  value={newFolderParentId != null ? String(newFolderParentId) : ''}
+                  onChange={val => setNewFolderParentId(val ? parseInt(val) : null)}
+                  options={[
+                    { value: '', label: '无 (根目录)' },
+                    ...folders.map(f => ({ value: String(f.id), label: f.name })),
+                  ]}
+                  placeholder="无 (根目录)"
+                />
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setFolderDialogOpen(false)}>取消</Button>
-            <Button onClick={handleCreateFolder} disabled={creatingFolder || !newFolderName.trim()}>
-              {creatingFolder ? '创建中...' : '创建'}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setFolderDialogOpen(false);
+                resetFolderDialog();
+              }}
+            >
+              取消
+            </Button>
+            <Button onClick={() => void handleFolderDialogSubmit()} disabled={creatingFolder || !newFolderName.trim()}>
+              {creatingFolder
+                ? folderDialogMode === 'rename'
+                  ? '保存中...'
+                  : '创建中...'
+                : folderDialogMode === 'rename'
+                  ? '保存'
+                  : '创建'}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { gravitinoAPI, type ColumnInfo } from '../../services/gravitinoApi';
 
-export type GravitinoTreeNodeType = 'catalog' | 'schema' | 'table' | 'column';
+export type GravitinoTreeNodeType = 'catalog' | 'database' | 'table' | 'column';
 
 export interface GravitinoTreeNode {
   id: string;
@@ -99,23 +99,23 @@ export function GravitinoMetadataTree({
     };
   }, [fetchCatalogs]);
 
-  const fetchSchemas = async (catalogNode: GravitinoTreeNode): Promise<GravitinoTreeNode[]> => {
+  const fetchDatabases = async (catalogNode: GravitinoTreeNode): Promise<GravitinoTreeNode[]> => {
     const catalogName = catalogNode.name;
     const response = await gravitinoAPI.listSchemas(catalogName);
-    return response.identifiers.map(schema => ({
-      id: `schema-${catalogName}-${schema.name}`,
-      name: schema.name,
-      type: 'schema' as const,
+    return response.identifiers.map(ns => ({
+      id: `database-${catalogName}-${ns.name}`,
+      name: ns.name,
+      type: 'database' as const,
       children: [],
       expanded: false,
     }));
   };
 
-  const fetchTables = async (schemaNode: GravitinoTreeNode, catalogName: string): Promise<GravitinoTreeNode[]> => {
-    const schemaName = schemaNode.name;
-    const response = await gravitinoAPI.listTables(catalogName, schemaName);
+  const fetchTables = async (databaseNode: GravitinoTreeNode, catalogName: string): Promise<GravitinoTreeNode[]> => {
+    const databaseName = databaseNode.name;
+    const response = await gravitinoAPI.listTables(catalogName, databaseName);
     return response.identifiers.map(table => ({
-      id: `table-${catalogName}-${schemaName}-${table.name}`,
+      id: `table-${catalogName}-${databaseName}-${table.name}`,
       name: table.name,
       type: 'table' as const,
       children: includeColumns ? [] : undefined,
@@ -125,20 +125,20 @@ export function GravitinoMetadataTree({
 
   const fetchColumns = async (
     catalogName: string,
-    schemaName: string,
+    databaseName: string,
     tableName: string
   ): Promise<GravitinoTreeNode[]> => {
-    const response = await gravitinoAPI.getTableDetail(catalogName, schemaName, tableName);
+    const response = await gravitinoAPI.getTableDetail(catalogName, databaseName, tableName);
     const cols = response.table?.columns ?? [];
     return cols.map(col => ({
-      id: `column-${catalogName}-${schemaName}-${tableName}-${col.name}`,
+      id: `column-${catalogName}-${databaseName}-${tableName}-${col.name}`,
       name: col.name,
       type: 'column' as const,
       dataType: formatColumnType(col),
     }));
   };
 
-  const toggleNode = async (node: GravitinoTreeNode, catalogName?: string, schemaName?: string) => {
+  const toggleNode = async (node: GravitinoTreeNode, catalogName?: string, databaseName?: string) => {
     const isLeafTable = node.type === 'table' && !includeColumns;
     const isColumn = node.type === 'column';
     if (isLeafTable || isColumn) return;
@@ -148,11 +148,11 @@ export function GravitinoMetadataTree({
       try {
         let children: GravitinoTreeNode[] = [];
         if (node.type === 'catalog') {
-          children = await fetchSchemas(node);
-        } else if (node.type === 'schema') {
+          children = await fetchDatabases(node);
+        } else if (node.type === 'database') {
           children = await fetchTables(node, catalogName!);
-        } else if (node.type === 'table' && includeColumns && catalogName && schemaName) {
-          children = await fetchColumns(catalogName, schemaName, node.name);
+        } else if (node.type === 'table' && includeColumns && catalogName && databaseName) {
+          children = await fetchColumns(catalogName, databaseName, node.name);
         }
         setTree(prev =>
           updateNodeById(prev, node.id, n => ({
@@ -171,7 +171,7 @@ export function GravitinoMetadataTree({
     }
   };
 
-  const refreshNode = async (e: React.MouseEvent, node: GravitinoTreeNode, catalogName?: string, schemaName?: string) => {
+  const refreshNode = async (e: React.MouseEvent, node: GravitinoTreeNode, catalogName?: string, databaseName?: string) => {
     e.stopPropagation();
     if (node.type === 'column') return;
     if (node.type === 'table' && !includeColumns) return;
@@ -180,11 +180,11 @@ export function GravitinoMetadataTree({
     try {
       let newChildren: GravitinoTreeNode[];
       if (node.type === 'catalog') {
-        newChildren = await fetchSchemas(node);
-      } else if (node.type === 'schema') {
+        newChildren = await fetchDatabases(node);
+      } else if (node.type === 'database') {
         newChildren = await fetchTables(node, catalogName!);
-      } else if (node.type === 'table' && includeColumns && catalogName && schemaName) {
-        newChildren = await fetchColumns(catalogName, schemaName, node.name);
+      } else if (node.type === 'table' && includeColumns && catalogName && databaseName) {
+        newChildren = await fetchColumns(catalogName, databaseName, node.name);
       } else {
         newChildren = [];
       }
@@ -205,13 +205,13 @@ export function GravitinoMetadataTree({
   const renderNode = (
     node: GravitinoTreeNode,
     catalogName?: string,
-    schemaName?: string,
+    databaseName?: string,
     level = 0
   ): React.JSX.Element => {
     const Icon =
       node.type === 'catalog'
         ? DatabaseIcon
-        : node.type === 'schema'
+        : node.type === 'database'
           ? FolderIcon
           : node.type === 'table'
             ? TableIcon
@@ -224,17 +224,17 @@ export function GravitinoMetadataTree({
     const isLoading = node.loading;
 
     const nextCatalog = node.type === 'catalog' ? node.name : catalogName;
-    const nextSchema = node.type === 'schema' ? node.name : schemaName;
+    const nextDatabase = node.type === 'database' ? node.name : databaseName;
 
     const qualifiedTable =
-      node.type === 'table' && catalogName && schemaName ? `${catalogName}.${schemaName}.${node.name}` : null;
+      node.type === 'table' && catalogName && databaseName ? `${catalogName}.${databaseName}.${node.name}` : null;
 
     return (
       <div key={node.id}>
         <div
           className="flex items-center gap-2 py-1 px-2 hover:bg-gray-100 cursor-pointer rounded-md transition-colors group text-left w-full"
           style={{ paddingLeft: `${level * 10 + 6}px` }}
-          onClick={() => void toggleNode(node, catalogName, schemaName)}
+          onClick={() => void toggleNode(node, catalogName, databaseName)}
           onDoubleClick={e => {
             e.preventDefault();
             if (node.type === 'table' && qualifiedTable) {
@@ -259,7 +259,7 @@ export function GravitinoMetadataTree({
           {!showChevron && <span className="w-4 shrink-0" />}
           <Icon
             className={`size-3.5 shrink-0 ${
-              node.type === 'catalog' ? 'text-blue-500' : node.type === 'schema' ? 'text-amber-600' : 'text-emerald-600'
+              node.type === 'catalog' ? 'text-blue-500' : node.type === 'database' ? 'text-amber-600' : 'text-emerald-600'
             } ${isColumn ? 'text-violet-500' : ''}`}
           />
           <span className="text-xs text-gray-800 truncate flex-1" title={isColumn ? node.dataType : undefined}>
@@ -272,7 +272,7 @@ export function GravitinoMetadataTree({
             <button
               type="button"
               className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:bg-gray-200 rounded"
-              onClick={e => void refreshNode(e, node, nextCatalog, nextSchema)}
+              onClick={e => void refreshNode(e, node, nextCatalog, nextDatabase)}
               title="刷新"
             >
               <RefreshCwIcon className={`size-3 text-gray-400 ${isLoading ? 'animate-spin' : ''}`} />
@@ -282,7 +282,7 @@ export function GravitinoMetadataTree({
         {isExpanded && hasChildren && (
           <div>
             {node.children!.map(child =>
-              renderNode(child, nextCatalog, node.type === 'schema' ? node.name : schemaName, level + 1)
+              renderNode(child, nextCatalog, node.type === 'database' ? node.name : databaseName, level + 1)
             )}
           </div>
         )}

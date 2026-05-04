@@ -88,12 +88,12 @@ export const gravitinoAPI = {
    */
   listTables: async (
     catalog: string,
-    schema: string,
+    database: string,
     metalake?: string
   ): Promise<TableListResponse> => {
     const metalakeName = metalake || GRAVITINO_METALAKE;
     const response: AxiosResponse<TableListResponse> = await axios.get(
-      `${GRAVITINO_API_BASE_URL}/${metalakeName}/catalogs/${catalog}/schemas/${schema}/tables`,
+      `${GRAVITINO_API_BASE_URL}/${metalakeName}/catalogs/${catalog}/schemas/${database}/tables`,
       {
         headers: {
           'Accept': 'application/vnd.gravitino.v1+json',
@@ -106,13 +106,13 @@ export const gravitinoAPI = {
 
   getTableDetail: async (
     catalog: string,
-    schema: string,
+    database: string,
     table: string,
     metalake?: string
   ): Promise<TableDetailResponse> => {
     const metalakeName = metalake || GRAVITINO_METALAKE;
     const response: AxiosResponse<TableDetailResponse> = await axios.get(
-      `${GRAVITINO_API_BASE_URL}/${metalakeName}/catalogs/${catalog}/schemas/${schema}/tables/${table}`,
+      `${GRAVITINO_API_BASE_URL}/${metalakeName}/catalogs/${catalog}/schemas/${database}/tables/${table}`,
       {
         headers: {
           'Accept': 'application/vnd.gravitino.v1+json',

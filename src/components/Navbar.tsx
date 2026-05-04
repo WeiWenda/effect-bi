@@ -1,5 +1,15 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { MessageSquareIcon, NetworkIcon, ListTodoIcon, BoxIcon, ZapIcon, LogOutIcon, UserIcon, BarChart3Icon, LayoutDashboardIcon } from 'lucide-react';
+import {
+  MessageSquareIcon,
+  Table2Icon,
+  BoxIcon,
+  ZapIcon,
+  BarChart3Icon,
+  LayoutDashboardIcon,
+  GitBranchIcon,
+  LogOutIcon,
+  UserIcon,
+} from 'lucide-react';
 import { tokenStorage } from '../services/llmApi';
 
 function Navbar(): React.JSX.Element {
@@ -37,7 +47,7 @@ function Navbar(): React.JSX.Element {
 
   return (
     <header className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-3">
-      <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+      <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 flex-wrap">
         <button
           onClick={() => navigate('/chat')}
           className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
@@ -50,6 +60,17 @@ function Navbar(): React.JSX.Element {
           Chat
         </button>
         <button
+          onClick={() => navigate('/etl')}
+          className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            isActive('/etl')
+              ? 'bg-white text-gray-800 shadow-sm'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <ZapIcon className="size-4" />
+          ETL
+        </button>
+        <button
           onClick={() => navigate('/lineage')}
           className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
             isActive('/lineage')
@@ -57,19 +78,8 @@ function Navbar(): React.JSX.Element {
               : 'text-gray-500 hover:text-gray-700'
           }`}
         >
-          <NetworkIcon className="size-4" />
-          Lineage
-        </button>
-        <button
-          onClick={() => navigate('/dags')}
-          className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-            isActive('/dags')
-              ? 'bg-white text-gray-800 shadow-sm'
-              : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          <ListTodoIcon className="size-4" />
-          DAG
+          <Table2Icon className="size-4" />
+          Table Meta
         </button>
         <button
           onClick={() => navigate('/cube')}
@@ -91,7 +101,7 @@ function Navbar(): React.JSX.Element {
           }`}
         >
           <BarChart3Icon className="size-4" />
-          查询
+          可视化查询
         </button>
         <button
           onClick={() => navigate('/dashboard')}
@@ -105,15 +115,15 @@ function Navbar(): React.JSX.Element {
           看板
         </button>
         <button
-          onClick={() => navigate('/etl')}
+          onClick={() => navigate('/dags')}
           className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-            isActive('/etl')
+            isActive('/dags')
               ? 'bg-white text-gray-800 shadow-sm'
               : 'text-gray-500 hover:text-gray-700'
           }`}
         >
-          <ZapIcon className="size-4" />
-          ETL
+          <GitBranchIcon className="size-4" />
+          链路治理
         </button>
       </div>
 

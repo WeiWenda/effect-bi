@@ -3,9 +3,11 @@ import fs from 'fs';
 import path from 'path';
 import { pool } from '../config/postgres.js';
 import { assertSingleSqlStatement, executeUserSql, trimRowsToPreview } from '../services/sqlQueryRunner.js';
-import { generateDagPythonWithFallback } from '../services/etlDagPythonClient.js';
-import type { AirflowOptions, QualityRule } from '../services/etlDagTypes.js';
+import { generateDagPythonForPublish } from '../services/etlDagPythonClient.js';
+import { buildAirflowOptionsForDag, normalizeRuntimeDepsForSave } from '../services/etlVersionPayload.js';
+import { defaultCatalogType, syncEtlPublishToNeo4j } from '../services/etlNeo4jPublish.js';
 import adhocRouter from './adhoc.js';
+import etlAirflowRouter from './etlAirflow.js';
 
 const router: Router = Router();
 
@@ -22,10 +24,6 @@ function dagsDir(): string {
 function safeDagFileBase(name: string, versionId: number): string {
   const safe = name.replace(/[^a-zA-Z0-9_]+/g, '_').replace(/^_|_$/g, '') || 'task';
   return `etl_${safe}_${versionId}`;
-}
-
-function dagFilePath(name: string, versionId: number): string {
-  return path.join(dagsDir(), `${safeDagFileBase(name, versionId)}.py`);
 }
 
 function deleteDagFileIfExists(name: string, versionId: number): void {
@@ -45,10 +43,16 @@ function mapTaskVersion(row: Record<string, unknown>) {
     name: row.name,
     remark: row.remark,
     isPublished: row.is_published,
-    graphJson: row.graph_json,
     sqlMain: row.sql_main,
-    airflowOptionsJson: row.airflow_options_json,
+    scheduleJson: row.schedule_json,
+    alertJson: row.alert_json,
+    runtimeDepsJson: row.runtime_deps_json,
     qualityRulesJson: row.quality_rules_json,
+    taskOutput: {
+      catalogName: (row.catalog_name as string) ?? '',
+      databaseName: (row.database_name as string) ?? '',
+      tableName: (row.table_name as string) ?? '',
+    },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -60,7 +64,6 @@ function mapAirflowDeployment(row: Record<string, unknown>) {
     etlTaskVersionId: row.etl_task_version_id,
     airflowDagId: row.airflow_dag_id,
     logicalTaskName: row.logical_task_name,
-    dagFilePath: row.dag_file_path,
     generator: row.generator,
     createdAt: row.created_at,
   };
@@ -177,22 +180,24 @@ router.delete('/folders/:id', async (req: Request, res: Response): Promise<void>
 });
 
 router.use(adhocRouter);
+router.use(etlAirflowRouter);
 
 // --- Task development ---
 
 router.get('/tasks', async (_req: Request, res: Response): Promise<void> => {
   try {
     const result = await pool.query(
-      `SELECT v1.name,
-              COUNT(*)::int AS version_count,
-              MAX(v1.created_at) AS updated_at,
-              (SELECT id FROM etl_task_versions v2 WHERE v2.name = v1.name AND v2.is_published = true LIMIT 1) AS published_version_id,
+      `SELECT i.name,
+              COUNT(v.id)::int AS version_count,
+              MAX(v.created_at) AS updated_at,
+              (SELECT v2.id FROM etl_task_versions v2 WHERE v2.etl_task_id = i.id AND v2.is_published = true LIMIT 1) AS published_version_id,
               ft.folder_id,
               COALESCE(ft.sort_order, 0) AS folder_sort_order
-       FROM etl_task_versions v1
-       LEFT JOIN etl_folder_tasks ft ON ft.task_name = v1.name
-       GROUP BY v1.name, ft.folder_id, ft.sort_order
-       ORDER BY MAX(v1.created_at) DESC`
+       FROM etl_task_info i
+       INNER JOIN etl_task_versions v ON v.etl_task_id = i.id
+       LEFT JOIN etl_folder_tasks ft ON ft.task_name = i.name
+       GROUP BY i.name, i.id, ft.folder_id, ft.sort_order
+       ORDER BY MAX(v.created_at) DESC`
     );
     res.json({ tasks: result.rows });
   } catch (error) {
@@ -210,7 +215,11 @@ router.delete('/tasks', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const versions = await pool.query('SELECT id, is_published FROM etl_task_versions WHERE name = $1', [name]);
+    const versions = await pool.query(
+      `SELECT v.id, v.is_published FROM etl_task_versions v
+       JOIN etl_task_info i ON i.id = v.etl_task_id WHERE i.name = $1`,
+      [name]
+    );
     if (versions.rows.length === 0) {
       res.status(404).json({ error: 'Task not found' });
       return;
@@ -225,7 +234,7 @@ router.delete('/tasks', async (req: Request, res: Response): Promise<void> => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query('DELETE FROM etl_task_versions WHERE name = $1', [name]);
+      await client.query('DELETE FROM etl_task_info WHERE name = $1', [name]);
       await client.query('DELETE FROM etl_folder_tasks WHERE task_name = $1', [name]);
       await client.query('COMMIT');
     } catch (err) {
@@ -239,6 +248,53 @@ router.delete('/tasks', async (req: Request, res: Response): Promise<void> => {
   } catch (error) {
     console.error('Error deleting etl task:', error);
     res.status(500).json({ error: 'Failed to delete task' });
+  }
+});
+
+/** PATCH body: { name, taskOutput: { catalogName, databaseName, tableName } } — 写入 etl_task_info，与版本无关 */
+router.patch('/tasks/output', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    const taskOutput = req.body?.taskOutput;
+    if (!taskOutput || typeof taskOutput !== 'object') {
+      res.status(400).json({ error: 'taskOutput is required' });
+      return;
+    }
+    const to = taskOutput as Record<string, unknown>;
+    const cn = typeof to.catalogName === 'string' ? to.catalogName.trim() : '';
+    const dn = typeof to.databaseName === 'string' ? to.databaseName.trim() : '';
+    const tn = typeof to.tableName === 'string' ? to.tableName.trim() : '';
+
+    await pool.query(`INSERT INTO etl_task_info (name) VALUES ($1) ON CONFLICT (name) DO NOTHING`, [name]);
+    const result = await pool.query(
+      `UPDATE etl_task_info
+       SET catalog_name = NULLIF($1, ''),
+           database_name = NULLIF($2, ''),
+           table_name = NULLIF($3, ''),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE name = $4
+       RETURNING catalog_name, database_name, table_name`,
+      [cn, dn, tn, name]
+    );
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    const row = result.rows[0];
+    res.json({
+      taskOutput: {
+        catalogName: (row.catalog_name as string) ?? '',
+        databaseName: (row.database_name as string) ?? '',
+        tableName: (row.table_name as string) ?? '',
+      },
+    });
+  } catch (error) {
+    console.error('Error patching task output:', error);
+    res.status(500).json({ error: 'Failed to update task output' });
   }
 });
 
@@ -282,7 +338,7 @@ router.patch('/tasks/placement', async (req: Request, res: Response): Promise<vo
           ? parseInt(sortOrder, 10)
           : null;
 
-    const exists = await pool.query('SELECT 1 FROM etl_task_versions WHERE name = $1 LIMIT 1', [taskName]);
+    const exists = await pool.query('SELECT 1 FROM etl_task_info WHERE name = $1 LIMIT 1', [taskName]);
     if (exists.rows.length === 0) {
       res.status(404).json({ error: 'Task not found' });
       return;
@@ -343,8 +399,12 @@ router.get('/tasks/versions', async (req: Request, res: Response): Promise<void>
       return;
     }
     const result = await pool.query(
-      `SELECT id, name, remark, is_published, graph_json, sql_main, airflow_options_json, quality_rules_json, created_at, updated_at
-       FROM etl_task_versions WHERE name = $1 ORDER BY created_at DESC`,
+      `SELECT v.id, i.name, v.remark, v.is_published, v.sql_main,
+              v.schedule_json, v.alert_json, v.runtime_deps_json, v.quality_rules_json, v.created_at, v.updated_at,
+              i.catalog_name, i.database_name, i.table_name
+       FROM etl_task_versions v
+       JOIN etl_task_info i ON i.id = v.etl_task_id
+       WHERE i.name = $1 ORDER BY v.created_at DESC`,
       [name]
     );
     res.json({ versions: result.rows.map(mapTaskVersion) });
@@ -362,8 +422,12 @@ router.get('/tasks/versions/:id', async (req: Request, res: Response): Promise<v
       return;
     }
     const result = await pool.query(
-      `SELECT id, name, remark, is_published, graph_json, sql_main, airflow_options_json, quality_rules_json, created_at, updated_at
-       FROM etl_task_versions WHERE id = $1`,
+      `SELECT v.id, i.name, v.remark, v.is_published, v.sql_main,
+              v.schedule_json, v.alert_json, v.runtime_deps_json, v.quality_rules_json, v.created_at, v.updated_at,
+              i.catalog_name, i.database_name, i.table_name
+       FROM etl_task_versions v
+       JOIN etl_task_info i ON i.id = v.etl_task_id
+       WHERE v.id = $1`,
       [id]
     );
     if (result.rows.length === 0) {
@@ -390,7 +454,7 @@ router.get('/tasks/versions/:id/deployments', async (req: Request, res: Response
       return;
     }
     const result = await pool.query(
-      `SELECT id, etl_task_version_id, airflow_dag_id, logical_task_name, dag_file_path, generator, created_at
+      `SELECT id, etl_task_version_id, airflow_dag_id, logical_task_name, generator, created_at
        FROM etl_airflow_deployments WHERE etl_task_version_id = $1 ORDER BY created_at DESC`,
       [id]
     );
@@ -398,6 +462,44 @@ router.get('/tasks/versions/:id/deployments', async (req: Request, res: Response
   } catch (error) {
     console.error('Error listing deployments:', error);
     res.status(500).json({ error: 'Failed to list deployments' });
+  }
+});
+
+/** Preview Airflow DAG Python (same renderer as publish). POST body matches DagGeneratePayload fields. */
+router.post('/dag/generate', (req: Request, res: Response): void => {
+  try {
+    const b = req.body || {};
+    const versionId = parseInt(String(b.versionId ?? ''), 10);
+    const logicalName = typeof b.logicalName === 'string' ? b.logicalName.trim() : '';
+    if (Number.isNaN(versionId) || !logicalName) {
+      res.status(400).json({ error: 'versionId and logicalName are required' });
+      return;
+    }
+    const sqlMain = typeof b.sqlMain === 'string' ? b.sqlMain : '';
+    const qualityRules = b.qualityRules !== undefined ? b.qualityRules : { sqlQueries: [], rules: [] };
+    const runtimeDepsJson = b.runtimeDepsJson ?? {};
+    const baseOpts = buildAirflowOptionsForDag(b.scheduleJson ?? {}, b.alertJson ?? {});
+    const airflowOptions =
+      b.airflowOptions && typeof b.airflowOptions === 'object' && !Array.isArray(b.airflowOptions)
+        ? { ...baseOpts, ...(b.airflowOptions as Record<string, unknown>) }
+        : baseOpts;
+    const out = generateDagPythonForPublish({
+      versionId,
+      logicalName,
+      sqlMain,
+      airflowOptions,
+      qualityRules,
+      runtimeDepsJson,
+    });
+    res.json({
+      dagId: out.dagId,
+      pythonSource: out.pythonSource,
+      format: 'node_decorators_globals',
+      generator: out.generator,
+    });
+  } catch (err) {
+    console.error('dag/generate:', err);
+    res.status(500).json({ error: 'DAG generation failed' });
   }
 });
 
@@ -410,9 +512,11 @@ router.post('/tasks/versions', async (req: Request, res: Response): Promise<void
     }
     const remark = typeof req.body?.remark === 'string' ? req.body.remark : '';
     const sqlMain = typeof req.body?.sqlMain === 'string' ? req.body.sqlMain : '';
-    const graphJson = req.body?.graphJson ?? {};
-    const airflowOptionsJson = req.body?.airflowOptionsJson ?? {};
-    const qualityRulesJson = req.body?.qualityRulesJson ?? [];
+    const scheduleJson = req.body?.scheduleJson ?? {};
+    const alertJson = req.body?.alertJson ?? {};
+    const runtimeDepsJson = req.body?.runtimeDepsJson ?? {};
+    const qualityRulesJson = req.body?.qualityRulesJson ?? { sqlQueries: [], rules: [] };
+    const runtimeDeps = normalizeRuntimeDepsForSave(runtimeDepsJson);
     const body = req.body || {};
     const hasFolderKey = 'folderId' in body;
     const rawFolderId = body.folderId;
@@ -441,11 +545,33 @@ router.post('/tasks/versions', async (req: Request, res: Response): Promise<void
       }
     }
 
+    await pool.query(`INSERT INTO etl_task_info (name) VALUES ($1) ON CONFLICT (name) DO NOTHING`, [name]);
+    const insVer = await pool.query(
+      `INSERT INTO etl_task_versions (
+         etl_task_id, remark, sql_main,
+         schedule_json, alert_json, runtime_deps_json, quality_rules_json
+       )
+       SELECT i.id, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb
+       FROM etl_task_info i WHERE i.name = $1
+       RETURNING id`,
+      [
+        name,
+        remark,
+        sqlMain,
+        JSON.stringify(scheduleJson),
+        JSON.stringify(alertJson),
+        JSON.stringify(runtimeDeps),
+        JSON.stringify(qualityRulesJson),
+      ]
+    );
+    const newVersionId = insVer.rows[0].id as number;
+
     const result = await pool.query(
-      `INSERT INTO etl_task_versions (name, remark, graph_json, sql_main, airflow_options_json, quality_rules_json)
-       VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6::jsonb)
-       RETURNING id, name, remark, is_published, graph_json, sql_main, airflow_options_json, quality_rules_json, created_at, updated_at`,
-      [name, remark, JSON.stringify(graphJson), sqlMain, JSON.stringify(airflowOptionsJson), JSON.stringify(qualityRulesJson)]
+      `SELECT v.id, i.name, v.remark, v.is_published, v.sql_main,
+              v.schedule_json, v.alert_json, v.runtime_deps_json, v.quality_rules_json, v.created_at, v.updated_at,
+              i.catalog_name, i.database_name, i.table_name
+       FROM etl_task_versions v JOIN etl_task_info i ON i.id = v.etl_task_id WHERE v.id = $1`,
+      [newVersionId]
     );
 
     if (hasFolderKey) {
@@ -485,7 +611,12 @@ router.put('/tasks/versions/:id/publish', async (req: Request, res: Response): P
 
     await client.query('BEGIN');
     const versionResult = await client.query(
-      'SELECT id, name, sql_main, airflow_options_json, quality_rules_json, graph_json FROM etl_task_versions WHERE id = $1',
+      `SELECT v.id, v.runtime_deps_json, v.sql_main, v.schedule_json, v.alert_json, v.quality_rules_json,
+              i.id AS etl_task_id, i.name,
+              i.catalog_name, i.database_name, i.table_name
+       FROM etl_task_versions v
+       JOIN etl_task_info i ON i.id = v.etl_task_id
+       WHERE v.id = $1`,
       [id]
     );
     if (versionResult.rows.length === 0) {
@@ -496,57 +627,96 @@ router.put('/tasks/versions/:id/publish', async (req: Request, res: Response): P
     const row = versionResult.rows[0];
     const logicalName = row.name as string;
     const oldPublished = await client.query(
-      'SELECT id FROM etl_task_versions WHERE name = $1 AND is_published = true',
+      `SELECT v.id FROM etl_task_versions v
+       JOIN etl_task_info i ON i.id = v.etl_task_id
+       WHERE i.name = $1 AND v.is_published = true`,
       [logicalName]
     );
 
-    await client.query('UPDATE etl_task_versions SET is_published = false WHERE name = $1 AND is_published = true', [
-      logicalName,
-    ]);
-    const upd = await client.query(
-      `UPDATE etl_task_versions SET is_published = true WHERE id = $1
-       RETURNING id, name, remark, is_published, graph_json, sql_main, airflow_options_json, quality_rules_json, created_at, updated_at`,
+    await client.query(
+      `UPDATE etl_task_versions v SET is_published = false
+       FROM etl_task_info i
+       WHERE v.etl_task_id = i.id AND i.name = $1 AND v.is_published = true`,
+      [logicalName]
+    );
+    await client.query(`UPDATE etl_task_versions SET is_published = true WHERE id = $1`, [id]);
+    const publishedRow = await client.query(
+      `SELECT v.id, i.name, v.remark, v.is_published, v.sql_main,
+              v.schedule_json, v.alert_json, v.runtime_deps_json, v.quality_rules_json, v.created_at, v.updated_at,
+              i.catalog_name, i.database_name, i.table_name
+       FROM etl_task_versions v JOIN etl_task_info i ON i.id = v.etl_task_id WHERE v.id = $1`,
       [id]
     );
 
-    const dir = dagsDir();
-    if (dir) {
+    let dagResult: { dagId: string; pythonSource: string; generator: string };
+    try {
+      const airflowOptions = buildAirflowOptionsForDag(row.schedule_json, row.alert_json);
+      const qualityRules = row.quality_rules_json ?? { sqlQueries: [], rules: [] };
+      dagResult = generateDagPythonForPublish({
+        versionId: id,
+        logicalName,
+        sqlMain: (row.sql_main as string) || '',
+        airflowOptions,
+        qualityRules,
+        runtimeDepsJson: row.runtime_deps_json,
+      });
+    } catch (dagErr) {
+      await client.query('ROLLBACK');
+      console.error('ETL publish: DAG generation failed:', dagErr);
+      res.status(500).json({ error: 'DAG generation failed' });
+      return;
+    }
+
+    for (const pr of oldPublished.rows) {
+      deleteDagFileIfExists(logicalName, pr.id as number);
+    }
+    const dagDir = dagsDir();
+    if (dagDir) {
       try {
-        for (const old of oldPublished.rows) {
-          const oid = old.id as number;
-          if (oid !== id) {
-            deleteDagFileIfExists(logicalName, oid);
-          }
-        }
-        fs.mkdirSync(dir, { recursive: true });
-        const airflowOptions = (row.airflow_options_json || {}) as AirflowOptions;
-        const qualityRules = (row.quality_rules_json || []) as QualityRule[];
-        const graphJson = row.graph_json;
-        const dagResult = await generateDagPythonWithFallback({
-          versionId: id,
-          logicalName,
-          sqlMain: (row.sql_main as string) || '',
-          airflowOptions,
-          qualityRules,
-          graphJson,
-        });
-        const outPath = dagFilePath(logicalName, id);
-        fs.writeFileSync(outPath, dagResult.pythonSource, 'utf8');
-        await client.query(
-          `INSERT INTO etl_airflow_deployments (etl_task_version_id, airflow_dag_id, logical_task_name, dag_file_path, generator)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [id, dagResult.dagId, logicalName, outPath, dagResult.generator]
-        );
-        console.log(`ETL published: wrote ${safeDagFileBase(logicalName, id)}.py to ${dir} (${dagResult.generator})`);
-      } catch (fileError) {
-        console.error('Error writing DAG file:', fileError);
+        fs.mkdirSync(dagDir, { recursive: true });
+        fs.writeFileSync(path.join(dagDir, `${dagResult.dagId}.py`), dagResult.pythonSource, 'utf8');
+      } catch (werr) {
+        await client.query('ROLLBACK');
+        console.error('ETL publish: write Airflow DAG file failed:', werr);
+        res.status(500).json({ error: 'Failed to write Airflow DAG file' });
+        return;
       }
     } else {
-      console.warn('ETL publish: ETL_AIRFLOW_DAGS_DIR and AIRFLOW_HOME unset; skipping DAG file write');
+      console.warn(
+        'ETL publish: ETL_AIRFLOW_DAGS_DIR / AIRFLOW_HOME not set; DAG source generated but not written to disk'
+      );
+    }
+
+    // 同一逻辑任务仅保留一条 deployment；清理上一发布版本遗留记录后再写入当前版本
+    await client.query(`DELETE FROM etl_airflow_deployments WHERE logical_task_name = $1`, [logicalName]);
+
+    await client.query(
+      `INSERT INTO etl_airflow_deployments (etl_task_version_id, airflow_dag_id, logical_task_name, generator)
+       VALUES ($1, $2, $3, $4)`,
+      [id, dagResult.dagId, logicalName, dagResult.generator]
+    );
+
+    try {
+      await syncEtlPublishToNeo4j({
+        etlTaskId: row.etl_task_id as number,
+        airflowDagId: dagResult.dagId,
+        catalogType: defaultCatalogType(),
+        runtimeDepsJson: row.runtime_deps_json,
+        etlTaskInfo: {
+          catalog_name: row.catalog_name as string | null,
+          database_name: row.database_name as string | null,
+          table_name: row.table_name as string | null,
+        },
+      });
+    } catch (neoErr) {
+      await client.query('ROLLBACK');
+      console.error('ETL publish: Neo4j sync failed:', neoErr);
+      res.status(500).json({ error: 'Neo4j lineage sync failed' });
+      return;
     }
 
     await client.query('COMMIT');
-    res.json({ version: mapTaskVersion(upd.rows[0]) });
+    res.json({ version: mapTaskVersion(publishedRow.rows[0]) });
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error publishing task version:', error);
@@ -626,7 +796,11 @@ router.delete('/tasks/versions/:id', async (req: Request, res: Response): Promis
       res.status(400).json({ error: 'Invalid id' });
       return;
     }
-    const check = await pool.query('SELECT name, is_published FROM etl_task_versions WHERE id = $1', [id]);
+    const check = await pool.query(
+      `SELECT i.name, v.is_published FROM etl_task_versions v
+       JOIN etl_task_info i ON i.id = v.etl_task_id WHERE v.id = $1`,
+      [id]
+    );
     if (check.rows.length === 0) {
       res.status(404).json({ error: 'Version not found' });
       return;

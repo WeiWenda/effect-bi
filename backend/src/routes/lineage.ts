@@ -129,9 +129,9 @@ router.get('/top', async (req: Request, res: Response): Promise<void> => {
     const session = getSession();
     const limitValue = neo4j.int(Math.floor(parseInt(limit as string)));
     const query = `
-      MATCH (n:HiveTable)
-      OPTIONAL MATCH (n)-[r]-()
-      WITH n, count(r) as degree
+      MATCH (n:Table)
+      OPTIONAL MATCH (n)-[r:MAKEUP]-()
+      WITH n, count(r) AS degree
       ORDER BY degree DESC
       LIMIT $limit
       RETURN n, degree
@@ -172,7 +172,7 @@ router.get('/entity', async (req: Request, res: Response): Promise<void> => {
 
     const session = getSession();
     const query = `
-      MATCH (n:HiveTable)
+      MATCH (n:Table)
       WHERE n.table_name = $tableName
       RETURN n
       LIMIT 1
@@ -218,7 +218,7 @@ router.get('/search', async (req: Request, res: Response): Promise<void> => {
     const session = getSession();
     const limitValue = neo4j.int(Math.floor(parseInt(limit as string)));
     const cypher = `
-      MATCH (n:HiveTable)
+      MATCH (n:Table)
       WHERE any(prop IN keys(n) WHERE toString(n[prop]) CONTAINS $searchQuery)
       RETURN n
       LIMIT $limit
@@ -259,8 +259,9 @@ router.get('/upstream', async (req: Request, res: Response): Promise<void> => {
     const session = getSession();
     const depthInt = Math.min(Math.floor(parseInt(depth as string)), 5); // Max depth 5
     const limitInt = Math.min(Math.floor(parseInt(limit as string)), 500); // Max limit 500
+    // ETL 血缘：(依赖)-[:MAKEUP]->(产出)；上游 = 沿 MAKEUP 逆向指向当前表
     const query = `
-      MATCH path = (start)<-[*1..${depthInt}]-(n)
+      MATCH path = (n)-[:MAKEUP*1..${depthInt}]->(start)
       WHERE elementId(start) = $entityId
       RETURN path
       LIMIT ${limitInt}
@@ -297,8 +298,9 @@ router.get('/downstream', async (req: Request, res: Response): Promise<void> => 
     const session = getSession();
     const depthInt = Math.min(Math.floor(parseInt(depth as string)), 5); // Max depth 5
     const limitInt = Math.min(Math.floor(parseInt(limit as string)), 500); // Max limit 500
+    // 沿 (start)-[:MAKEUP]-> 的下游：产出表再被谁依赖
     const query = `
-      MATCH path = (start)-[*1..${depthInt}]->(n)
+      MATCH path = (start)-[:MAKEUP*1..${depthInt}]->(n)
       WHERE elementId(start) = $entityId
       RETURN path
       LIMIT ${limitInt}
@@ -358,7 +360,7 @@ router.get('/dag/:dagId', async (req: Request, res: Response): Promise<void> => 
     const session = getSession();
     const nodeIdsString = nodeIds.map((id: string) => `'${id}'`).join(', ');
     const query = `
-      MATCH (a:HiveTable)-[r]->(b:HiveTable)
+      MATCH (a:Table)-[r:MAKEUP]->(b:Table)
       WHERE elementId(a) IN [${nodeIdsString}] AND elementId(b) IN [${nodeIdsString}]
       RETURN a, r, b
     `;

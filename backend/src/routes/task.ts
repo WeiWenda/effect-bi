@@ -58,9 +58,11 @@ router.get('/dag/:dagId', async (req: Request, res: Response): Promise<void> => 
     try {
       const nodeIdsString = nodeIds.map((id: string) => `'${id}'`).join(', ');
       const query = `
-        MATCH (a:HiveTable)-[r]->(b:HiveTable)
+        MATCH (a:Table)-[r:MAKEUP]->(b:Table)
         WHERE elementId(a) IN [${nodeIdsString}] AND elementId(b) IN [${nodeIdsString}]
-        RETURN elementId(a) as source, elementId(b) as target, a.task_file as source_task_file, b.task_file as target_task_file
+        RETURN elementId(a) AS source, elementId(b) AS target,
+               coalesce(a.task_file, a.AIRFLOW_DAG_ID) AS source_task_file,
+               coalesce(b.task_file, b.AIRFLOW_DAG_ID) AS target_task_file
       `;
       const result = await session.run(query);
       result.records.forEach((record: any) => {
@@ -76,9 +78,9 @@ router.get('/dag/:dagId', async (req: Request, res: Response): Promise<void> => 
 
       // Also fetch task_file for nodes without dependencies
       const nodeQuery = `
-        MATCH (n:HiveTable)
+        MATCH (n:Table)
         WHERE elementId(n) IN [${nodeIdsString}]
-        RETURN elementId(n) as id, n.task_file as task_file
+        RETURN elementId(n) AS id, coalesce(n.task_file, n.AIRFLOW_DAG_ID) AS task_file
       `;
       const nodeResult = await session.run(nodeQuery);
       nodeResult.records.forEach((record: any) => {

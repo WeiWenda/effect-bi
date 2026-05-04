@@ -2,10 +2,19 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SearchIcon, ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
 import { lineageAPI, LineageEntity } from '../services/lineageApi';
+import {
+  lineageEntityRouteTableName,
+  lineageTableDescription,
+  lineageTableDisplayName,
+  lineageTableLayer,
+} from '../services/lineageNodeMeta';
 
 interface SearchResult {
   id: string;
+  /** 展示用（可含 catalog / database 限定） */
   name: string;
+  /** 与 GET /lineage/entity?tableName= 一致，优先 Neo4j `table_name` */
+  routeTableName: string;
   description: string;
   layer: string;
 }
@@ -30,9 +39,10 @@ function Lineage(): React.JSX.Element {
         const response = await lineageAPI.getTopTablesByDegree(3);
         const tables: SearchResult[] = response.entities.map((entity: LineageEntity) => ({
           id: entity.id,
-          name: entity.properties.name || entity.properties.table_name || 'Unknown',
-          description: entity.properties.description || entity.properties.comment || '',
-          layer: entity.properties.layer || entity.properties.tier || 'Unknown',
+          name: lineageTableDisplayName(entity.properties),
+          routeTableName: lineageEntityRouteTableName(entity.properties),
+          description: lineageTableDescription(entity.properties),
+          layer: lineageTableLayer(entity.properties),
         }));
         setTopTables(tables);
       } catch (error) {
@@ -77,9 +87,10 @@ function Lineage(): React.JSX.Element {
       const response = await lineageAPI.searchEntities(query, 100);
       const results: SearchResult[] = response.entities.map((entity: LineageEntity) => ({
         id: entity.id,
-        name: entity.properties.name || entity.properties.table_name || 'Unknown',
-        description: entity.properties.description || entity.properties.comment || '',
-        layer: entity.properties.layer || entity.properties.tier || 'Unknown',
+        name: lineageTableDisplayName(entity.properties),
+        routeTableName: lineageEntityRouteTableName(entity.properties),
+        description: lineageTableDescription(entity.properties),
+        layer: lineageTableLayer(entity.properties),
       }));
 
       setTotalResults(results.length);
@@ -170,7 +181,7 @@ function Lineage(): React.JSX.Element {
                   {topTables.map((table) => (
                     <div
                       key={table.id}
-                      onClick={() => navigate(`/lineage/table/${table.name}`)}
+                      onClick={() => navigate(`/lineage/table/${encodeURIComponent(table.routeTableName)}`)}
                       className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 cursor-pointer hover:shadow-md hover:border-blue-300 transition-all"
                     >
                       <div className="flex items-start gap-3 mb-3">
@@ -216,7 +227,7 @@ function Lineage(): React.JSX.Element {
                 {paginatedResults.map((result) => (
                   <tr
                     key={result.id}
-                    onClick={() => navigate(`/lineage/table/${result.name}`)}
+                    onClick={() => navigate(`/lineage/table/${encodeURIComponent(result.routeTableName)}`)}
                     className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors"
                   >
                     <td className="px-6 py-4 text-sm text-gray-800 font-medium">{result.name}</td>
