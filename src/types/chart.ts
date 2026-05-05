@@ -237,6 +237,8 @@ export interface DashboardInfo {
   id: number;
   name: string;
   folder_id: number | null;
+  /** 同一 folder 内的展示顺序（与 updated_at 无关） */
+  sort_order: number;
   filters: FilterConfig[];
   layout: DashboardLayoutItem[];
   chart_count?: number;

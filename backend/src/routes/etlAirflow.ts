@@ -18,6 +18,7 @@ import {
   deliverPendingAlerts,
   parseAlertRulesFromOptions,
 } from '../services/etlAlertService.js';
+import { neo4jHasManagedProducerForTable } from '../services/etlRuntimeDepNeo4j.js';
 
 const router: Router = Router();
 
@@ -65,6 +66,16 @@ router.post('/runtime-deps/check-ready', async (req: Request, res: Response): Pr
       return;
     }
     const secondaryNorm = normalizeSecondaryPartitions(secondaryPartitions);
+
+    try {
+      const hasManagedProducer = await neo4jHasManagedProducerForTable(catalog, database, table);
+      if (!hasManagedProducer) {
+        res.json({ ready: true });
+        return;
+      }
+    } catch (neoErr) {
+      console.error('check-ready neo4j (falling back to partition check):', neoErr);
+    }
 
     const client = await pool.connect();
     try {

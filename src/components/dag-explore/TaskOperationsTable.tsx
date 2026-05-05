@@ -5,15 +5,26 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 
 interface TaskOperationsTableProps {
   dagId: number;
-  taskFiles: string[];
   taskNames: Record<string, string>;
 }
 
 interface CellData {
   instances: TaskInstance[];
-  finalStatus: 'success' | 'failed' | 'none';
+  finalStatus: 'success' | 'failed' | 'running' | 'none';
   hasRetries: boolean;
   lastEndTime?: string;
+}
+
+/** 与 backend task.ts formatPartitionDateKey 一致，用于匹配 instances 的列键 */
+function partitionLookupKeyFromYmd(ymd: string): string {
+  const utcDate = new Date(`${ymd}T00:00:00.000Z`);
+  const beijingDate = new Date(utcDate.getTime() + 8 * 60 * 60 * 1000);
+  return beijingDate.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/** 列键 `2026-05-05 08:00:00` → 表头短格式 `05-05` */
+function mmddFromPartitionColumnKey(key: string): string {
+  return key.slice(0, 10).slice(5);
 }
 
 interface TrendDataPoint {
@@ -23,17 +34,17 @@ interface TrendDataPoint {
 }
 
 interface TrendData {
-  taskFile: string;
+  rowKey: string;
   taskName: string;
   data: TrendDataPoint[];
 }
 
-export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperationsTableProps) {
+export function TaskOperationsTable({ dagId, taskNames }: TaskOperationsTableProps) {
   const [days, setDays] = useState(7);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Record<string, Record<string, CellData>>>({});
   const [dateRange, setDateRange] = useState<string[]>([]);
-  const [selectedCell, setSelectedCell] = useState<{ taskFile: string; date: string } | null>(null);
+  const [selectedCell, setSelectedCell] = useState<{ rowKey: string; date: string } | null>(null);
   const [startTimeTrend, setStartTimeTrend] = useState<TrendData[]>([]);
   const [endTimeTrend, setEndTimeTrend] = useState<TrendData[]>([]);
   const [chartHeight, setChartHeight] = useState(192); // 默认高度
@@ -55,40 +66,39 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
     setLoading(true);
     try {
       const response = await taskAPI.getTaskInstances(dagId, days);
-      
-      // Generate date range (past N days including today) in Beijing time
+      const rowKeysOrdered =
+        response.rowKeys?.length > 0 ? response.rowKeys : response.taskFiles ?? [];
+
+      // 日历日（本地）→ 与后端相同的 partition 列键，才能命中 instances[row][key]
       const dates: string[] = [];
-      const today = new Date();
-      const beijingOffset = 8 * 60 * 60 * 1000;
-      const beijingToday = new Date(today.getTime() + beijingOffset);
-      beijingToday.setUTCHours(0, 0, 0, 0);
-      
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
       for (let i = days - 1; i >= 0; i--) {
-        const d = new Date(beijingToday.getTime() - i * 24 * 60 * 60 * 1000);
-        const dateStr = d.toISOString().slice(0, 19).replace('T', ' ');
-        dates.push(dateStr);
+        const d = new Date(todayStart);
+        d.setDate(d.getDate() - i);
+        const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        dates.push(partitionLookupKeyFromYmd(ymd));
       }
       setDateRange(dates);
       
       // Process instances into cell data
       const cellData: Record<string, Record<string, CellData>> = {};
       
-      // Use taskFiles from response (actual task_file paths) instead of props (node IDs)
-      const actualTaskFiles = response.taskFiles;
-      
-      actualTaskFiles.forEach(taskFile => {
-        cellData[taskFile] = {};
+      rowKeysOrdered.forEach(rowKey => {
+        cellData[rowKey] = {};
         dates.forEach(date => {
-          const instances = response.instances[taskFile]?.[date] || [];
-          const finalStatus = instances.length > 0 
-            ? (instances[instances.length - 1].status as 'success' | 'failed')
-            : 'none';
+          const instances = response.instances[rowKey]?.[date] || [];
+          const lastSt = instances.length > 0 ? instances[instances.length - 1].status : '';
+          const finalStatus =
+            lastSt === 'success' || lastSt === 'failed' || lastSt === 'running'
+              ? lastSt
+              : 'none';
           const hasRetries = instances.length > 1;
           const lastEndTime = instances.length > 0 
             ? instances[instances.length - 1].end_time 
             : undefined;
           
-          cellData[taskFile][date] = {
+          cellData[rowKey][date] = {
             instances,
             finalStatus,
             hasRetries,
@@ -101,10 +111,10 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
 
       // Process trend data
       const processTrendData = (type: 'start' | 'end'): TrendData[] => {
-        return actualTaskFiles.map(taskFile => {
+        return rowKeysOrdered.map(rowKey => {
           const trendPoints: TrendDataPoint[] = [];
           dates.forEach(date => {
-            const instances = response.instances[taskFile]?.[date] || [];
+            const instances = response.instances[rowKey]?.[date] || [];
             if (instances.length === 0) return;
 
             const successfulInstances = instances.filter(inst => inst.status === 'success');
@@ -118,7 +128,7 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
               const startDate = new Date(earliestStart.start_time);
               const timeInMinutes = startDate.getHours() * 60 + startDate.getMinutes();
               trendPoints.push({
-                date: date.slice(5), // 只显示 MM-DD
+                date: mmddFromPartitionColumnKey(date),
                 time: timeInMinutes,
                 timeStr: startDate.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
               });
@@ -128,7 +138,7 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
               const endDate = new Date(lastSuccess.end_time);
               const timeInMinutes = endDate.getHours() * 60 + endDate.getMinutes();
               trendPoints.push({
-                date: date.slice(5), // 只显示 MM-DD
+                date: mmddFromPartitionColumnKey(date),
                 time: timeInMinutes,
                 timeStr: endDate.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
               });
@@ -136,8 +146,8 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
           });
 
           return {
-            taskFile,
-            taskName: getTaskName(taskFile),
+            rowKey,
+            taskName: getTaskName(rowKey),
             data: trendPoints
           };
         }).filter(trend => trend.data.length > 0);
@@ -154,13 +164,14 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
 
   const getCellColor = (cell: CellData): string => {
     if (cell.finalStatus === 'none') return 'bg-gray-100';
+    if (cell.finalStatus === 'running') return 'bg-sky-600';
     if (cell.finalStatus === 'failed') return 'bg-red-500';
     if (cell.hasRetries) return 'bg-yellow-600';
     return 'bg-green-500';
   };
 
-  const getTaskName = (taskFile: string): string => {
-    return taskNames[taskFile] || taskFile.split('/').pop() || taskFile;
+  const getTaskName = (rowKey: string): string => {
+    return taskNames[rowKey] || rowKey;
   };
 
   const formatTimeAxis = (value: number) => {
@@ -190,9 +201,7 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
     '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1'
   ];
 
-  const selectedCellData = selectedCell 
-    ? data[selectedCell.taskFile]?.[selectedCell.date]
-    : null;
+  const selectedCellData = selectedCell ? data[selectedCell.rowKey]?.[selectedCell.date] : null;
 
   return (
     <div className="flex flex-col bg-white">
@@ -242,19 +251,19 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
                 </th>
                 {dateRange.map(date => (
                   <th key={date} className="px-4 py-3 text-center text-sm font-semibold text-gray-700 border-b border-gray-200 min-w-[100px]">
-                    {date.slice(5)}
+                    {mmddFromPartitionColumnKey(date)}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {Object.keys(data).map(taskFile => (
-                <tr key={taskFile} className="border-b border-gray-100">
+              {Object.keys(data).map(rowKey => (
+                <tr key={rowKey} className="border-b border-gray-100">
                   <td className="px-4 py-3 text-sm text-gray-800 font-medium">
-                    {getTaskName(taskFile)}
+                    {getTaskName(rowKey)}
                   </td>
                   {dateRange.map(date => {
-                    const cell = data[taskFile]?.[date] || { instances: [], finalStatus: 'none', hasRetries: false };
+                    const cell = data[rowKey]?.[date] || { instances: [], finalStatus: 'none', hasRetries: false };
                     const cellColor = getCellColor(cell);
                     const hasData = cell.finalStatus !== 'none';
 
@@ -263,7 +272,7 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
                         {hasData ? (
                           <div
                             className={`w-full h-8 rounded cursor-pointer hover:opacity-80 transition-opacity flex items-center justify-center text-xs text-white font-medium ${cellColor}`}
-                            onClick={() => setSelectedCell({ taskFile, date })}
+                            onClick={() => setSelectedCell({ rowKey, date })}
                             title={cell.lastEndTime}
                           >
                             {cell.lastEndTime ? new Date(cell.lastEndTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''}
@@ -287,12 +296,13 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
           {/* Start Time Trend Chart */}
           {startTimeTrend.length > 0 && (() => {
             const startChartData = dateRange.map(d => {
-              const entry: Record<string, any> = { date: d.slice(5) };
+              const mm = mmddFromPartitionColumnKey(d);
+              const entry: Record<string, any> = { date: mm };
               startTimeTrend.forEach(trend => {
                 const dataMap = Object.fromEntries(trend.data.map(td => [td.date, td]));
-                const point = dataMap[d.slice(5)];
-                entry[trend.taskFile] = point?.time;
-                entry[`${trend.taskFile}_str`] = point?.timeStr;
+                const point = dataMap[mm];
+                entry[trend.rowKey] = point?.time;
+                entry[`${trend.rowKey}_str`] = point?.timeStr;
               });
               return entry;
             });
@@ -309,9 +319,9 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
                       <Legend />
                       {startTimeTrend.map((trend, index) => (
                         <Line
-                          key={trend.taskFile}
+                          key={trend.rowKey}
                           name={trend.taskName}
-                          dataKey={trend.taskFile}
+                          dataKey={trend.rowKey}
                           stroke={colors[index % colors.length]}
                           strokeWidth={2}
                           dot={{ r: 3 }}
@@ -328,12 +338,13 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
           {/* End Time Trend Chart */}
           {endTimeTrend.length > 0 && (() => {
             const endChartData = dateRange.map(d => {
-              const entry: Record<string, any> = { date: d.slice(5) };
+              const mm = mmddFromPartitionColumnKey(d);
+              const entry: Record<string, any> = { date: mm };
               endTimeTrend.forEach(trend => {
                 const dataMap = Object.fromEntries(trend.data.map(td => [td.date, td]));
-                const point = dataMap[d.slice(5)];
-                entry[trend.taskFile] = point?.time;
-                entry[`${trend.taskFile}_str`] = point?.timeStr;
+                const point = dataMap[mm];
+                entry[trend.rowKey] = point?.time;
+                entry[`${trend.rowKey}_str`] = point?.timeStr;
               });
               return entry;
             });
@@ -350,9 +361,9 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
                       <Legend />
                       {endTimeTrend.map((trend, index) => (
                         <Line
-                          key={trend.taskFile}
+                          key={trend.rowKey}
                           name={trend.taskName}
-                          dataKey={trend.taskFile}
+                          dataKey={trend.rowKey}
                           stroke={colors[index % colors.length]}
                           strokeWidth={2}
                           dot={{ r: 3 }}
@@ -377,24 +388,34 @@ export function TaskOperationsTable({ dagId, taskFiles, taskNames }: TaskOperati
           {selectedCell && selectedCellData && (
             <div className="py-4">
               <p className="text-sm text-gray-600 mb-4">
-                任务: {getTaskName(selectedCell.taskFile)} | 日期: {selectedCell.date}
+                任务: {getTaskName(selectedCell.rowKey)} | 日期: {selectedCell.date}
               </p>
               <div className="space-y-2">
                 {selectedCellData.instances.map((inst, index) => (
                   <div
                     key={index}
                     className={`p-3 rounded-lg border ${
-                      inst.status === 'success' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+                      inst.status === 'success'
+                        ? 'bg-green-50 border-green-200'
+                        : inst.status === 'running'
+                          ? 'bg-sky-50 border-sky-200'
+                          : 'bg-red-50 border-red-200'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-sm font-medium">
                         尝试 #{inst.attempt}
                       </span>
-                      <span className={`text-xs px-2 py-0.5 rounded ${
-                        inst.status === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                      }`}>
-                        {inst.status === 'success' ? '成功' : '失败'}
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded ${
+                          inst.status === 'success'
+                            ? 'bg-green-100 text-green-700'
+                            : inst.status === 'running'
+                              ? 'bg-sky-100 text-sky-800'
+                              : 'bg-red-100 text-red-700'
+                        }`}
+                      >
+                        {inst.status === 'success' ? '成功' : inst.status === 'running' ? '运行中' : '失败'}
                       </span>
                     </div>
                     <div className="text-xs text-gray-600">

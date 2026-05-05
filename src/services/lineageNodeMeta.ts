@@ -31,6 +31,19 @@ export function lineageEntityRouteTableName(properties: Record<string, unknown>)
   return lineageTableDisplayName(properties);
 }
 
+/** Gravitino / 产出明细共用：catalog → database(schema) → table */
+export function lineageTableGravitinoLocation(
+  properties: Record<string, unknown>
+): { catalog: string; database: string; table: string } | null {
+  const catalog = typeof properties.catalog_name === 'string' ? properties.catalog_name.trim() : '';
+  const database = typeof properties.database_name === 'string' ? properties.database_name.trim() : '';
+  const table = typeof properties.table_name === 'string' ? properties.table_name.trim() : '';
+  if (catalog && database && table) {
+    return { catalog, database, table };
+  }
+  return null;
+}
+
 export function lineageTableDescription(properties: Record<string, unknown>): string {
   const desc = typeof properties.description === 'string' ? properties.description.trim() : '';
   if (desc) return desc;

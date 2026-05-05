@@ -37,6 +37,7 @@ interface DashboardRow {
   id: number;
   name: string;
   folder_id: number | null;
+  sort_order?: number;
   filters: any;
   layout: any;
   chart_count?: number;
@@ -49,6 +50,7 @@ function toDashboardInfo(row: DashboardRow): DashboardInfo {
     id: row.id,
     name: row.name,
     folder_id: row.folder_id,
+    sort_order: typeof row.sort_order === 'number' ? row.sort_order : 0,
     filters: typeof row.filters === 'string' ? JSON.parse(row.filters) : row.filters || [],
     layout: typeof row.layout === 'string' ? JSON.parse(row.layout) : row.layout || [],
     chart_count: row.chart_count || 0,
@@ -115,7 +117,16 @@ export const dashboardAPI = {
     return { dashboard: dashInfo, charts };
   },
 
-  update: async (id: number, data: { name?: string; folderId?: number | null; filters?: FilterConfig[]; layout?: DashboardLayoutItem[] }): Promise<DashboardInfo> => {
+  update: async (
+    id: number,
+    data: {
+      name?: string;
+      folderId?: number | null;
+      filters?: FilterConfig[];
+      layout?: DashboardLayoutItem[];
+      sortOrder?: number;
+    }
+  ): Promise<DashboardInfo> => {
     const response: AxiosResponse<{ dashboard: DashboardRow }> = await axios.put(`${DASHBOARD_API_BASE_URL}/${id}`, data);
     return toDashboardInfo(response.data.dashboard);
   },

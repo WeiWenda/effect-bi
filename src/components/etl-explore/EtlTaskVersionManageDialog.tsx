@@ -1,15 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
+import axios from 'axios';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { SaveIcon, UploadIcon, Loader2Icon, Trash2Icon } from 'lucide-react';
 import { useToast } from '../ui/toast';
 import { etlAPI, type EtlTaskVersion } from '../../services/etlApi';
 import { parseRuntimeDepsObjectFromJsonText } from '../../utils/etlRuntimeDeps';
+import { formatDateYMD } from '../../utils/filterTimeRelative';
 export interface EtlTaskDraftSnapshot {
   sqlMain: string;
   runtimeDepsJsonText: string;
   qualityRulesJson: string;
   cronExpression: string;
+  /** YYYY-MM-DD */
+  scheduleStartDate: string;
   retries: number;
   retryDelayMinutes: number;
   alertRulesJson: string;
@@ -106,6 +110,9 @@ export function EtlTaskVersionManageDialog({
           owner: 'etl',
           emailOnFailure: false,
           cronExpression: d.cronExpression.trim(),
+          scheduleStartDate: /^\d{4}-\d{2}-\d{2}$/.test((d.scheduleStartDate || '').trim())
+            ? d.scheduleStartDate.trim()
+            : formatDateYMD(new Date()),
           retries: d.retries,
           retryDelayMinutes: d.retryDelayMinutes,
         },
@@ -133,8 +140,18 @@ export function EtlTaskVersionManageDialog({
   const handlePublish = async (id: number) => {
     setPublishingId(id);
     try {
-      await etlAPI.publishTaskVersion(id);
-      toast('版本发布成功', 'success');
+      const { airflowUnpause, airflowBackfill } = await etlAPI.publishTaskVersion(id);
+      const parts: string[] = ['版本发布成功'];
+      if ('ok' in airflowUnpause && airflowUnpause.ok) {
+        parts.push('Airflow 已开启调度');
+      }
+      if ('ok' in airflowBackfill && airflowBackfill.ok) {
+        parts.push('已发起未完成区间回填');
+      }
+      toast(parts.join('，'), 'success');
+      if ('ok' in airflowBackfill && airflowBackfill.ok === false) {
+        toast(`回填未成功：${airflowBackfill.error.slice(0, 160)}`, 'error');
+      }
       onVersionsChanged?.();
       await loadVersions();
     } catch {
@@ -157,8 +174,14 @@ export function EtlTaskVersionManageDialog({
       onDeletedVersion(id);
       onVersionsChanged?.();
       await loadVersions();
-    } catch {
-      toast('删除失败', 'error');
+    } catch (e: unknown) {
+      const msg =
+        axios.isAxiosError(e) &&
+        e.response?.data &&
+        typeof (e.response.data as { error?: string }).error === 'string'
+          ? (e.response.data as { error: string }).error
+          : '删除失败';
+      toast(msg, 'error');
     } finally {
       setDeletingId(null);
     }

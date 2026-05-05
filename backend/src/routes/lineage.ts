@@ -76,15 +76,22 @@ function convertNeo4jPathToPath(path: Neo4jPath | null): Path {
   // Process segments to get intermediate nodes and relationships
   if (path.segments && Array.isArray(path.segments)) {
     path.segments.forEach((segment: any) => {
-      // Add relationship
+      // Add relationship（Neo4j driver 版本差异时 fallback 到 segment 两端）
       if (segment.relationship) {
-        relationships.push({
-          id: segment.relationship.elementId,
-          type: segment.relationship.type,
-          properties: segment.relationship.properties,
-          startNodeId: segment.relationship.startNodeElementId,
-          endNodeId: segment.relationship.endNodeElementId
-        });
+        const r = segment.relationship;
+        const startNodeId =
+          r.startNodeElementId ?? segment.start?.elementId ?? segment.start?.identity?.toString?.();
+        const endNodeId =
+          r.endNodeElementId ?? segment.end?.elementId ?? segment.end?.identity?.toString?.();
+        if (startNodeId && endNodeId) {
+          relationships.push({
+            id: r.elementId ?? `${startNodeId}-${endNodeId}`,
+            type: r.type,
+            properties: r.properties ?? {},
+            startNodeId,
+            endNodeId,
+          });
+        }
       }
 
       // Add start node from segment
@@ -395,13 +402,14 @@ router.get('/dag/:dagId', async (req: Request, res: Response): Promise<void> => 
         });
       }
 
-      // Add relationship
+      const rs = relationship.startNodeElementId ?? startNode.elementId;
+      const re = relationship.endNodeElementId ?? endNode.elementId;
       relationships.push({
         id: relationship.elementId,
         type: relationship.type,
-        properties: relationship.properties,
-        startNodeId: relationship.startNodeElementId,
-        endNodeId: relationship.endNodeElementId
+        properties: relationship.properties ?? {},
+        startNodeId: rs,
+        endNodeId: re,
       });
     });
 

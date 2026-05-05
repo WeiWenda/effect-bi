@@ -249,6 +249,20 @@ export function DashboardListPage(): React.JSX.Element {
     return direct + childCount;
   };
 
+  /** 同一文件夹下的稳定顺序（与 updated_at 无关） */
+  const dashboardsInFolder = useCallback(
+    (fid: number | null) =>
+      dashboards
+        .filter(d => (fid === null ? d.folder_id == null : d.folder_id === fid))
+        .sort(
+          (a, b) =>
+            (a.sort_order - b.sort_order) ||
+            a.name.localeCompare(b.name) ||
+            a.id - b.id
+        ),
+    [dashboards]
+  );
+
   const tree = buildFolderTree(folders);
 
   const [dragDashboardId, setDragDashboardId] = useState<number | null>(null);
@@ -257,18 +271,98 @@ export function DashboardListPage(): React.JSX.Element {
   const [dropTargetFolderId, setDropTargetFolderId] = useState<number | null>(null);
   const [dropPosition, setDropPosition] = useState<'before' | 'after' | null>(null);
 
+  const [dragDashboardReorderId, setDragDashboardReorderId] = useState<number | null>(null);
+  const [dropDashboardReorderTargetId, setDropDashboardReorderTargetId] = useState<number | null>(null);
+  const [dropDashboardReorderPosition, setDropDashboardReorderPosition] = useState<'before' | 'after' | null>(null);
+
+  const clearDashboardDragUi = () => {
+    setDragDashboardId(null);
+    setDropFolderId(null);
+    setDragFolderId(null);
+    setDropTargetFolderId(null);
+    setDropPosition(null);
+    setDragDashboardReorderId(null);
+    setDropDashboardReorderTargetId(null);
+    setDropDashboardReorderPosition(null);
+  };
+
   const handleDashboardDragStart = (e: React.DragEvent, dashId: number) => {
+    setDragDashboardReorderId(null);
     setDragDashboardId(dashId);
     e.dataTransfer.setData('application/dashboard-id', String(dashId));
     e.dataTransfer.effectAllowed = 'move';
   };
 
   const handleDashboardDragEnd = () => {
+    clearDashboardDragUi();
+  };
+
+  const handleDashboardReorderDragStart = (e: React.DragEvent, dashId: number) => {
+    e.stopPropagation();
     setDragDashboardId(null);
-    setDropFolderId(null);
-    setDragFolderId(null);
-    setDropTargetFolderId(null);
-    setDropPosition(null);
+    setDragDashboardReorderId(dashId);
+    e.dataTransfer.setData('application/dashboard-reorder-id', String(dashId));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDashboardReorderDragOver = (e: React.DragEvent, dashId: number) => {
+    if (dragDashboardReorderId == null) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    setDropDashboardReorderTargetId(dashId);
+    setDropDashboardReorderPosition(e.clientY < midY ? 'before' : 'after');
+  };
+
+  const handleDashboardReorderDragLeave = (e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDropDashboardReorderTargetId(null);
+      setDropDashboardReorderPosition(null);
+    }
+  };
+
+  const handleDashboardReorderDrop = async (
+    targetDashId: number,
+    folderContextId: number | null,
+    position: 'before' | 'after'
+  ) => {
+    const srcId = dragDashboardReorderId;
+    if (!srcId || srcId === targetDashId) {
+      clearDashboardDragUi();
+      return;
+    }
+    const src = dashboards.find(d => d.id === srcId);
+    const tgt = dashboards.find(d => d.id === targetDashId);
+    if (!src || !tgt || (src.folder_id ?? null) !== (tgt.folder_id ?? null)) {
+      toast('请在同一文件夹内调整顺序', 'error');
+      clearDashboardDragUi();
+      return;
+    }
+    const siblings = dashboardsInFolder(folderContextId);
+    const targetIndex = siblings.findIndex(s => s.id === targetDashId);
+    const tgtOrder = tgt.sort_order;
+    let newSortOrder: number;
+    if (position === 'before') {
+      newSortOrder =
+        targetIndex > 0
+          ? (siblings[targetIndex - 1].sort_order + tgtOrder) / 2
+          : tgtOrder - 1;
+    } else {
+      newSortOrder =
+        targetIndex < siblings.length - 1
+          ? (tgtOrder + siblings[targetIndex + 1].sort_order) / 2
+          : tgtOrder + 1;
+    }
+    try {
+      await dashboardAPI.update(srcId, { sortOrder: newSortOrder });
+      toast('顺序已更新', 'success');
+      await loadData();
+    } catch {
+      toast('排序失败', 'error');
+    } finally {
+      clearDashboardDragUi();
+    }
   };
 
   const handleFolderDragOver = (e: React.DragEvent, folderId: number) => {
@@ -339,7 +433,11 @@ export function DashboardListPage(): React.JSX.Element {
 
   const handleFolderDrop = (e: React.DragEvent, folderId: number) => {
     e.preventDefault();
-    const dashId = parseInt(e.dataTransfer.getData('application/dashboard-id'));
+    if (e.dataTransfer.getData('application/dashboard-reorder-id')) {
+      clearDashboardDragUi();
+      return;
+    }
+    const dashId = parseInt(e.dataTransfer.getData('application/dashboard-id'), 10);
     if (dashId) {
       handleMoveDashboard(dashId, folderId);
     }
@@ -349,7 +447,11 @@ export function DashboardListPage(): React.JSX.Element {
 
   const handleRootDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    const dashId = parseInt(e.dataTransfer.getData('application/dashboard-id'));
+    if (e.dataTransfer.getData('application/dashboard-reorder-id')) {
+      clearDashboardDragUi();
+      return;
+    }
+    const dashId = parseInt(e.dataTransfer.getData('application/dashboard-id'), 10);
     if (dashId) {
       handleMoveDashboard(dashId, null);
     }
@@ -379,7 +481,11 @@ export function DashboardListPage(): React.JSX.Element {
             setDropPosition(null);
           }}
           onDrop={e => {
-            // Check if it's a folder reorder or dashboard drop
+            if (e.dataTransfer.getData('application/dashboard-reorder-id')) {
+              e.preventDefault();
+              clearDashboardDragUi();
+              return;
+            }
             const folderId = e.dataTransfer.getData('application/folder-id');
             if (folderId && dropPosition) {
               handleFolderReorderDrop(e, node.id, dropPosition);
@@ -438,7 +544,9 @@ export function DashboardListPage(): React.JSX.Element {
         </div>
         {isExpanded && (
           <div>
-            {dashboards.filter(d => d.folder_id === node.id).map(dash => renderDashboardItem(dash, depth + 1))}
+            {dashboardsInFolder(node.id).map(dash =>
+              renderDashboardItem(dash, depth + 1, node.id)
+            )}
             {node.children?.map(child => renderFolder(child, depth + 1))}
           </div>
         )}
@@ -451,29 +559,69 @@ export function DashboardListPage(): React.JSX.Element {
     return (node.children || []).every(child => isAllExpanded(child));
   };
 
-  const renderDashboardItem = (dash: DashboardInfo, depth: number = 0) => (
-    <div
-      key={dash.id}
-      className={`flex items-center gap-2 px-3 py-2 hover:bg-blue-50 cursor-pointer group ${dragDashboardId === dash.id ? 'opacity-40' : ''}`}
-      style={{ paddingLeft: `${depth * 16 + 28}px` }}
-      onClick={() => navigate(`/dashboard/${dash.id}`)}
-      draggable
-      onDragStart={e => handleDashboardDragStart(e, dash.id)}
-      onDragEnd={handleDashboardDragEnd}
-    >
-      <LayoutDashboardIcon className="size-4 text-blue-500" />
-      <span className="text-sm text-gray-700 flex-1 truncate">{dash.name}</span>
-      <span className="text-xs text-gray-400">{dash.chart_count || 0} 图表</span>
-      <button
-        onClick={e => { e.stopPropagation(); handleDeleteDashboard(dash.id); }}
-        className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-500 transition-all"
-      >
-        <Trash2Icon className="size-3" />
-      </button>
-    </div>
-  );
+  const renderDashboardItem = (dash: DashboardInfo, depth: number, folderContextId: number | null) => {
+    const isReorderTarget =
+      dragDashboardReorderId != null &&
+      dropDashboardReorderTargetId === dash.id &&
+      dropDashboardReorderPosition;
+    const borderCls =
+      isReorderTarget && dropDashboardReorderPosition === 'before'
+        ? 'border-t-2 border-blue-400'
+        : isReorderTarget && dropDashboardReorderPosition === 'after'
+          ? 'border-b-2 border-blue-400'
+          : '';
 
-  const rootDashboards = dashboards.filter(d => !d.folder_id);
+    return (
+      <div
+        key={dash.id}
+        className={`flex items-center gap-1 px-2 py-2 hover:bg-blue-50 group ${borderCls} ${
+          dragDashboardId === dash.id || dragDashboardReorderId === dash.id ? 'opacity-40' : ''
+        }`}
+        style={{ paddingLeft: `${depth * 16 + 8}px` }}
+        onDragOver={e => handleDashboardReorderDragOver(e, dash.id)}
+        onDragLeave={handleDashboardReorderDragLeave}
+        onDrop={e => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (dragDashboardReorderId != null && dropDashboardReorderPosition) {
+            void handleDashboardReorderDrop(dash.id, folderContextId, dropDashboardReorderPosition);
+          }
+        }}
+      >
+        <div
+          className="shrink-0 cursor-grab p-0.5"
+          draggable
+          role="presentation"
+          onClick={e => e.stopPropagation()}
+          onDragStart={e => handleDashboardReorderDragStart(e, dash.id)}
+          onDragEnd={handleDashboardDragEnd}
+        >
+          <GripVerticalIcon className="size-3.5 text-gray-300 group-hover:text-gray-400" />
+        </div>
+        <div
+          className="flex flex-1 min-w-0 items-center gap-2 cursor-pointer"
+          draggable
+          onDragStart={e => handleDashboardDragStart(e, dash.id)}
+          onDragEnd={handleDashboardDragEnd}
+          onClick={() => navigate(`/dashboard/${dash.id}`)}
+        >
+          <LayoutDashboardIcon className="size-4 text-blue-500 shrink-0" />
+          <span className="text-sm text-gray-700 flex-1 truncate">{dash.name}</span>
+          <span className="text-xs text-gray-400 shrink-0">{dash.chart_count || 0} 图表</span>
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              void handleDeleteDashboard(dash.id);
+            }}
+            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-500 transition-all shrink-0"
+          >
+            <Trash2Icon className="size-3" />
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   if (loading) {
     return (
@@ -578,7 +726,7 @@ export function DashboardListPage(): React.JSX.Element {
           onDrop={handleRootDrop}
         >
           {tree.map(node => renderFolder(node))}
-          {rootDashboards.map(dash => renderDashboardItem(dash))}
+          {dashboardsInFolder(null).map(dash => renderDashboardItem(dash, 0, null))}
         </div>
       </div>
 
@@ -597,7 +745,14 @@ export function DashboardListPage(): React.JSX.Element {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {dashboards.map(dash => (
+            {[...dashboards]
+              .sort(
+                (a, b) =>
+                  (a.sort_order - b.sort_order) ||
+                  a.name.localeCompare(b.name) ||
+                  a.id - b.id
+              )
+              .map(dash => (
               <div
                 key={dash.id}
                 onClick={() => navigate(`/dashboard/${dash.id}`)}

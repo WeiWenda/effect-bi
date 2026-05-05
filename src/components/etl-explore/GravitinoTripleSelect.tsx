@@ -28,9 +28,11 @@ export interface GravitinoTripleSelectProps {
   variant?: 'tableCells' | 'stacked' | 'inlineRow';
   className?: string;
   /**
-   * 在 Dialog 等带 transform 的容器内应设为 true，下拉挂到 body，避免错位/裁切。
+   * 在 Dialog 等带 transform 的容器内应设为 true，下拉挂到 portal 根节点或 body，避免错位/裁切。
    */
   portal?: boolean;
+  /** 与 `portal` 同用：传入 Dialog 内容区内的挂载点，否则下拉搜索框无法获得焦点（Radix 焦点陷阱） */
+  portalContainer?: HTMLElement | null;
   /** 选项较多时开启搜索（Catalog / Database / Table 均支持） */
   searchable?: boolean;
 }
@@ -47,6 +49,7 @@ export function GravitinoTripleSelect({
   variant = 'tableCells',
   className = '',
   portal = false,
+  portalContainer = null,
   searchable = true,
 }: GravitinoTripleSelectProps): React.JSX.Element {
   const [catalogOptions, setCatalogOptions] = useState<string[]>([]);
@@ -168,6 +171,7 @@ export function GravitinoTripleSelect({
       size="sm"
       className={selectWrapCls}
       portal={portal}
+      portalContainer={portalContainer}
       searchable={searchable}
       searchPlaceholder="搜索 catalog…"
     />
@@ -183,6 +187,7 @@ export function GravitinoTripleSelect({
       size="sm"
       className={selectWrapCls}
       portal={portal}
+      portalContainer={portalContainer}
       searchable={searchable}
       searchPlaceholder="搜索 database…"
     />
@@ -198,6 +203,7 @@ export function GravitinoTripleSelect({
       size="sm"
       className={selectWrapCls}
       portal={portal}
+      portalContainer={portalContainer}
       searchable={searchable}
       searchPlaceholder="搜索 table…"
     />

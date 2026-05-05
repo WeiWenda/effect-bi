@@ -31,13 +31,30 @@ export interface EtlTaskOutput {
   tableName: string;
 }
 
+/** etl_table_partition_detail 行（血缘表详情「产出信息」） */
+export interface EtlTablePartitionDetailRow {
+  id: number;
+  catalogName: string;
+  databaseName: string;
+  tableName: string;
+  primaryPartitionKey: string;
+  secondaryPartitionKey: string;
+  etlTaskVersionId: number | null;
+  partitionDate: string;
+  isVerified: boolean;
+  runningStatus: string;
+  lastSuccessAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface EtlTaskVersion {
   id: number;
   name: string;
   remark: string;
   isPublished: boolean;
   sqlMain: string;
-  /** 调度：crontab、重试、owner 等 */
+  /** 调度：crontab、调度开始日 scheduleStartDate、重试、owner 等 */
   scheduleJson: Record<string, unknown>;
   /** 任务报警：{ rules: [...] } */
   alertJson: Record<string, unknown>;
@@ -63,7 +80,10 @@ export interface EtlTaskListRow {
   name: string;
   version_count: number;
   updated_at: string;
+  /** 当前标记为已发布的版本 id（每任务至多一条） */
   published_version_id: number | null;
+  /** 按 updated_at、id 计的最新版本 id，用于与 published 比较 */
+  latest_version_id: number | null;
   folder_id: number | null;
   folder_sort_order: number;
 }
@@ -76,6 +96,15 @@ export interface EtlAirflowDeployment {
   generator: string;
   createdAt: string;
 }
+
+/** PUT .../publish 成功响应：是否已通过 REST 取消暂停 DAG（开启调度） */
+export type EtlPublishAirflowUnpause = { skipped: true } | { ok: true };
+
+/** 发布后按调度开始日～当前时间发起的 Backfill（Airflow 3 /api/v2） */
+export type EtlPublishAirflowBackfill =
+  | { skipped: true; reason: string }
+  | { ok: true; backfillId: number }
+  | { ok: false; error: string };
 
 export const etlFolderAPI = {
   list: async (): Promise<EtlFolder[]> => {
@@ -198,8 +227,13 @@ export const etlAPI = {
     return response.data;
   },
 
-  getTaskVersion: async (id: number): Promise<{ version: EtlTaskVersion }> => {
-    const response = await axios.get(`${ETL_API_BASE_URL}/tasks/versions/${id}`);
+  getTaskVersion: async (
+    id: number,
+    opts?: { signal?: AbortSignal }
+  ): Promise<{ version: EtlTaskVersion }> => {
+    const response = await axios.get(`${ETL_API_BASE_URL}/tasks/versions/${id}`, {
+      signal: opts?.signal,
+    });
     return response.data;
   },
 
@@ -228,11 +262,18 @@ export const etlAPI = {
     return response.data;
   },
 
-  publishTaskVersion: async (id: number): Promise<{ version: EtlTaskVersion }> => {
-    const response: AxiosResponse<{ version: EtlTaskVersion }> = await axios.put(
-      `${ETL_API_BASE_URL}/tasks/versions/${id}/publish`,
-      {}
-    );
+  publishTaskVersion: async (
+    id: number
+  ): Promise<{
+    version: EtlTaskVersion;
+    airflowUnpause: EtlPublishAirflowUnpause;
+    airflowBackfill: EtlPublishAirflowBackfill;
+  }> => {
+    const response: AxiosResponse<{
+      version: EtlTaskVersion;
+      airflowUnpause: EtlPublishAirflowUnpause;
+      airflowBackfill: EtlPublishAirflowBackfill;
+    }> = await axios.put(`${ETL_API_BASE_URL}/tasks/versions/${id}/publish`, {});
     return response.data;
   },
 
@@ -261,6 +302,31 @@ export const etlAPI = {
 
   deleteTaskVersion: async (id: number): Promise<{ success: boolean }> => {
     const response = await axios.delete(`${ETL_API_BASE_URL}/tasks/versions/${id}`);
+    return response.data;
+  },
+
+  /** GET etl_table_partition_detail：按 catalog / database(schema) / table；分区日期倒序分页 */
+  listTablePartitionDetails: async (params: {
+    catalog: string;
+    database: string;
+    table: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{
+    partitionDetails: EtlTablePartitionDetailRow[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> => {
+    const response = await axios.get(`${ETL_API_BASE_URL}/table-partition-details`, {
+      params: {
+        catalog: params.catalog,
+        database: params.database,
+        table: params.table,
+        page: params.page ?? 1,
+        pageSize: params.pageSize ?? 20,
+      },
+    });
     return response.data;
   },
 };

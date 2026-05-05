@@ -110,7 +110,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
   try {
     const { folderId } = req.query;
     let query = `
-      SELECT d.id, d.name, d.folder_id, d.filters, d.layout, d.created_at, d.updated_at,
+      SELECT d.id, d.name, d.folder_id, d.sort_order, d.filters, d.layout, d.created_at, d.updated_at,
              COALESCE(dc.chart_count, 0) AS chart_count
       FROM dashboards d
       LEFT JOIN (SELECT dashboard_id, COUNT(*) AS chart_count FROM dashboard_charts GROUP BY dashboard_id) dc
@@ -125,7 +125,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       query += ' WHERE d.folder_id IS NULL';
     }
 
-    query += ' ORDER BY d.updated_at DESC';
+    query += ' ORDER BY d.sort_order ASC, d.name ASC, d.id ASC';
 
     const result = await pool.query(query, params);
     res.json({ dashboards: result.rows });
@@ -147,11 +147,18 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const fid = folderId || null;
+    const nextSort = await pool.query(
+      `SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM dashboards WHERE folder_id IS NOT DISTINCT FROM $1`,
+      [fid]
+    );
+    const sort0 = (nextSort.rows[0]?.n as number) ?? 0;
+
     const result = await pool.query(
-      `INSERT INTO dashboards (name, folder_id, filters, layout)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO dashboards (name, folder_id, filters, layout, sort_order)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [name, folderId || null, JSON.stringify(filters || []), JSON.stringify(layout || [])]
+      [name, fid, JSON.stringify(filters || []), JSON.stringify(layout || []), sort0]
     );
 
     res.status(201).json({ dashboard: result.rows[0] });
@@ -201,7 +208,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 router.put('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { name, folderId, filters, layout } = req.body;
+    const { name, folderId, filters, layout, sortOrder } = req.body;
 
     const existing = await pool.query('SELECT id FROM dashboards WHERE id = $1', [id]);
     if (existing.rows.length === 0) {
@@ -209,21 +216,38 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const updates: string[] = [];
+    const values: unknown[] = [];
+    let p = 1;
+    if (name !== undefined && name !== null) {
+      updates.push(`name = $${p++}`);
+      values.push(name);
+    }
+    if (folderId !== undefined) {
+      updates.push(`folder_id = $${p++}`);
+      values.push(folderId);
+    }
+    if (filters !== undefined) {
+      updates.push(`filters = $${p++}`);
+      values.push(JSON.stringify(filters));
+    }
+    if (layout !== undefined) {
+      updates.push(`layout = $${p++}`);
+      values.push(JSON.stringify(layout));
+    }
+    if (sortOrder !== undefined && typeof sortOrder === 'number' && !Number.isNaN(sortOrder)) {
+      updates.push(`sort_order = $${p++}`);
+      values.push(sortOrder);
+    }
+    if (updates.length === 0) {
+      const cur = await pool.query('SELECT * FROM dashboards WHERE id = $1', [id]);
+      res.json({ dashboard: cur.rows[0] });
+      return;
+    }
+    values.push(id);
     const result = await pool.query(
-      `UPDATE dashboards SET
-        name = COALESCE($1, name),
-        folder_id = COALESCE($2, folder_id),
-        filters = COALESCE($3, filters),
-        layout = COALESCE($4, layout)
-       WHERE id = $5
-       RETURNING *`,
-      [
-        name || null,
-        folderId !== undefined ? folderId : null,
-        filters !== undefined ? JSON.stringify(filters) : null,
-        layout !== undefined ? JSON.stringify(layout) : null,
-        id,
-      ]
+      `UPDATE dashboards SET ${updates.join(', ')} WHERE id = $${values.length} RETURNING *`,
+      values
     );
 
     res.json({ dashboard: result.rows[0] });

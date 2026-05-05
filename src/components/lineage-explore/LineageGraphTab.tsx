@@ -504,9 +504,9 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
       const newEdges: Edge[] = [];
 
       lineageRes.paths.forEach((path) => {
-        const pathNodes = path.nodes;
-        if (pathNodes.length > 0) {
-          const endNode = pathNodes[pathNodes.length - 1];
+        const pathNodes = path.nodes.filter(pn => pn.id !== nodeId);
+        let idx = 0;
+        pathNodes.forEach(endNode => {
           const newNodeId = endNode.id;
           const ep = endNode.properties as Record<string, unknown>;
           const nodeName = lineageTableDisplayName(ep);
@@ -514,16 +514,15 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
           const description = lineageTableDescription(ep);
 
           if (!existingNodeIds.has(newNodeId)) {
-            // Position new nodes near their parent to avoid flash at (0,0)
             const parentNode = nodes.find(n => n.id === nodeId);
             const offsetX = direction === 'downstream' ? 300 : -300;
-            const existingCount = newNodes.length;
+            const existingCount = idx++;
             const node: Node = {
               id: newNodeId,
               type: 'custom',
-              position: { 
-                x: (parentNode?.position?.x ?? 0) + offsetX, 
-                y: (parentNode?.position?.y ?? 0) + existingCount * 80 
+              position: {
+                x: (parentNode?.position?.x ?? 0) + offsetX,
+                y: (parentNode?.position?.y ?? 0) + existingCount * 80,
               },
               data: {
                 label: nodeName,
@@ -541,8 +540,8 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
               },
             };
             newNodes.push(node);
+            existingNodeIds.add(newNodeId);
           } else {
-            // Node already exists but may be hidden — unhide it
             const existingNode = nodes.find(n => n.id === newNodeId);
             if (existingNode?.data.hidden) {
               newNodes.push({
@@ -551,20 +550,20 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
               });
             }
           }
+        });
 
-          path.relationships.forEach((rel) => {
-            const edgeId = `${rel.startNodeId}-${rel.endNodeId}`;
-            if (!existingEdgeIds.has(edgeId)) {
-              newEdges.push({
-                id: edgeId,
-                source: rel.startNodeId,
-                target: rel.endNodeId,
-                type: 'smoothstep',
-                animated: true,
-              });
-            }
-          });
-        }
+        path.relationships.forEach((rel) => {
+          const edgeId = `${rel.startNodeId}-${rel.endNodeId}`;
+          if (!existingEdgeIds.has(edgeId)) {
+            newEdges.push({
+              id: edgeId,
+              source: rel.startNodeId,
+              target: rel.endNodeId,
+              type: 'smoothstep',
+              animated: true,
+            });
+          }
+        });
       });
 
       if (newNodes.length > 0 || newEdges.length > 0) {
@@ -663,13 +662,13 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
       const upstreamOrder: string[] = [];
       const downstreamOrder: string[] = [];
 
-      // Process upstream paths
+      // Process upstream paths — Cypher 为 (上游)-[:MAKEUP*]->(中心)，path 末端是当前表，不能只取 pathNodes[last]
       upstreamRes.paths.forEach((path) => {
         const pathNodes = path.nodes;
-        if (pathNodes.length > 0) {
-          const upstreamNode = pathNodes[pathNodes.length - 1]; // Get the last node (actual upstream node)
-          const nodeId = upstreamNode.id;
-          const up = upstreamNode.properties as Record<string, unknown>;
+        pathNodes.forEach(pathNode => {
+          if (pathNode.id === entityId) return;
+          const nodeId = pathNode.id;
+          const up = pathNode.properties as Record<string, unknown>;
           const nodeName = lineageTableDisplayName(up);
           const layer = lineageTableLayer(up);
           const description = lineageTableDescription(up);
@@ -698,30 +697,29 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
             nodeMap.set(nodeId, node);
             newNodes.push(node);
           }
+        });
 
-          // Add edge
-          path.relationships.forEach((rel) => {
-            const edgeId = `${rel.startNodeId}-${rel.endNodeId}`;
-            if (!newEdges.find((e) => e.id === edgeId)) {
-              newEdges.push({
-                id: edgeId,
-                source: rel.startNodeId,
-                target: rel.endNodeId,
-                type: 'smoothstep',
-                animated: true,
-              });
-            }
-          });
-        }
+        path.relationships.forEach((rel) => {
+          const edgeId = `${rel.startNodeId}-${rel.endNodeId}`;
+          if (!newEdges.find((e) => e.id === edgeId)) {
+            newEdges.push({
+              id: edgeId,
+              source: rel.startNodeId,
+              target: rel.endNodeId,
+              type: 'smoothstep',
+              animated: true,
+            });
+          }
+        });
       });
 
-      // Process downstream paths
+      // Process downstream paths — (中心)-[:MAKEUP*]->(下游)，含路径上所有非中心节点
       downstreamRes.paths.forEach((path) => {
         const pathNodes = path.nodes;
-        if (pathNodes.length > 0) {
-          const downstreamNode = pathNodes[pathNodes.length - 1];
-          const nodeId = downstreamNode.id;
-          const dp = downstreamNode.properties as Record<string, unknown>;
+        pathNodes.forEach(pathNode => {
+          if (pathNode.id === entityId) return;
+          const nodeId = pathNode.id;
+          const dp = pathNode.properties as Record<string, unknown>;
           const nodeName = lineageTableDisplayName(dp);
           const layer = lineageTableLayer(dp);
           const description = lineageTableDescription(dp);
@@ -750,21 +748,20 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
             nodeMap.set(nodeId, node);
             newNodes.push(node);
           }
+        });
 
-          // Add edge
-          path.relationships.forEach((rel) => {
-            const edgeId = `${rel.startNodeId}-${rel.endNodeId}`;
-            if (!newEdges.find((e) => e.id === edgeId)) {
-              newEdges.push({
-                id: edgeId,
-                source: rel.startNodeId,
-                target: rel.endNodeId,
-                type: 'smoothstep',
-                animated: true,
-              });
-            }
-          });
-        }
+        path.relationships.forEach((rel) => {
+          const edgeId = `${rel.startNodeId}-${rel.endNodeId}`;
+          if (!newEdges.find((e) => e.id === edgeId)) {
+            newEdges.push({
+              id: edgeId,
+              source: rel.startNodeId,
+              target: rel.endNodeId,
+              type: 'smoothstep',
+              animated: true,
+            });
+          }
+        });
       });
 
       // Apply display limit: mark nodes beyond config.limit as hidden per direction

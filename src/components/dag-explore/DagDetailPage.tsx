@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ArrowLeftIcon, Network as NetworkIcon } from 'lucide-react';
+import { ArrowLeftIcon, ExternalLinkIcon, Network as NetworkIcon } from 'lucide-react';
 import {
   ReactFlow,
   Node,
@@ -13,7 +13,6 @@ import {
   ReactFlowProvider,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import Editor from '@monaco-editor/react';
 import { dagAPI, DagView } from '../../services/dagApi';
 import { lineageAPI } from '../../services/lineageApi';
 import {
@@ -21,7 +20,6 @@ import {
   lineageTableDisplayName,
   lineageTableLayer,
 } from '../../services/lineageNodeMeta';
-import { fileAPI } from '../../services/fileApi';
 import { TaskOperationsTable } from './TaskOperationsTable';
 import ELK from 'elkjs/lib/elk.bundled.js';
 
@@ -32,12 +30,20 @@ interface DagDetailPageProps {
 
 interface NodeData {
   label: string;
+  /** catalog.database.table，运维表等展示用 */
+  qualifiedTableName?: string;
+  /** Neo4j Table，已发布 ETL 同步的 DAG id，如 auto_generate_14 */
+  airflowDagId?: string;
   layer?: string;
   description?: string;
   entityId: string;
   focused?: boolean;
   taskFile?: string;
 }
+
+const AIRFLOW_UI_BASE =
+  (import.meta.env.VITE_AIRFLOW_UI_BASE_URL as string | undefined)?.replace(/\/$/, '') ||
+  'http://localhost:8080';
 
 const CustomNode = ({ data, onClick }: { data: NodeData; onClick?: () => void }) => {
   const nodeClass = data.focused
@@ -133,7 +139,6 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [activeTab, setActiveTab] = useState<'development' | 'operations'>('development');
-  const [taskCode, setTaskCode] = useState('');
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
 
@@ -148,25 +153,6 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
   const handleNodeClick = useCallback((nodeId: string) => {
     setFocusedNodeId(prev => prev === nodeId ? null : nodeId);
   }, []);
-
-  // Load task code when focused node changes
-  useEffect(() => {
-    if (focusedNodeId) {
-      const focusedNode = nodes.find(n => n.id === focusedNodeId);
-      if (focusedNode?.data.taskFile) {
-        fileAPI.getTaskFile(focusedNode.data.taskFile)
-          .then(response => {
-            setTaskCode(response.content);
-          })
-          .catch(error => {
-            console.error('Error loading task file:', error);
-            setTaskCode('-- Failed to load task file');
-          });
-      } else {
-        setTaskCode('-- No task file associated with this node');
-      }
-    }
-  }, [focusedNodeId, nodes]);
 
   // Update nodes when focusedNodeId changes
   useEffect(() => {
@@ -214,6 +200,12 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
         path.nodes.forEach((lineageNode) => {
           const p = lineageNode.properties as Record<string, unknown>;
           const nodeName = lineageTableDisplayName(p);
+          const catalogRaw = typeof p.catalog_name === 'string' ? p.catalog_name.trim() : '';
+          const databaseRaw = typeof p.database_name === 'string' ? p.database_name.trim() : '';
+          const tableRaw = typeof p.table_name === 'string' ? p.table_name.trim() : '';
+          const catalog = catalogRaw || 'hive';
+          const qualifiedTableName =
+            databaseRaw && tableRaw ? `${catalog}.${databaseRaw}.${tableRaw}` : undefined;
           const layer = lineageTableLayer(p);
           const description = lineageTableDescription(p);
           const tf =
@@ -223,6 +215,13 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
                 ? p.AIRFLOW_DAG_ID.trim()
                 : undefined;
 
+          const airflowDagIdRaw =
+            typeof p.AIRFLOW_DAG_ID === 'string' && p.AIRFLOW_DAG_ID.trim()
+              ? p.AIRFLOW_DAG_ID.trim()
+              : typeof p.airflow_dag_id === 'string' && p.airflow_dag_id.trim()
+                ? p.airflow_dag_id.trim()
+                : undefined;
+
           if (!nodeMap.has(lineageNode.id)) {
             const newNode: Node = {
               id: lineageNode.id,
@@ -230,6 +229,8 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
               position: { x: 0, y: 0 },
               data: {
                 label: nodeName,
+                qualifiedTableName,
+                airflowDagId: airflowDagIdRaw,
                 layer,
                 description,
                 entityId: lineageNode.id,
@@ -275,22 +276,29 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
 
   const handleTabChange = (tab: 'development' | 'operations') => {
     setActiveTab(tab);
-    if (tab === 'development' && !taskCode) {
-      // Load task code (placeholder for now)
-      setTaskCode(`-- Task Development Code for ${dagView?.name || 'DAG'}\n-- This is a placeholder for the actual task code\n\nSELECT * FROM example_table\nWHERE date = CURRENT_DATE;`);
-    }
   };
 
   const nodeTypes = createNodeTypes(handleNodeClick);
 
-  // Create mapping from node IDs to table names
+  // 运维表：优先 catalog.database.table；否则退回血缘展示名
   const taskNames = useMemo(() => {
     const mapping: Record<string, string> = {};
     nodes.forEach(node => {
-      mapping[node.id] = node.data.label;
+      const d = node.data as NodeData;
+      mapping[node.id] = d.qualifiedTableName ?? d.label;
     });
     return mapping;
   }, [nodes]);
+
+  const focusedNode = useMemo(
+    () => (focusedNodeId ? nodes.find(n => n.id === focusedNodeId) : undefined),
+    [nodes, focusedNodeId]
+  );
+  const focusedNodeData = focusedNode?.data as NodeData | undefined;
+  const airflowDagHref =
+    focusedNodeData?.airflowDagId != null && focusedNodeData.airflowDagId !== ''
+      ? `${AIRFLOW_UI_BASE}/dags/${encodeURIComponent(focusedNodeData.airflowDagId)}`
+      : null;
 
   if (loading) {
     return (
@@ -368,25 +376,44 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
           {/* Tab content */}
           <div>
             {activeTab === 'development' ? (
-              <div style={{ height: '600px' }}>
-                <Editor
-                  height="100%"
-                  defaultLanguage="shell"
-                  value={taskCode}
-                  onChange={(value) => setTaskCode(value || '')}
-                  theme="vs-light"
-                  options={{
-                    minimap: { enabled: true },
-                    fontSize: 14,
-                    lineNumbers: 'on',
-                    roundedSelection: false,
-                    scrollBeyondLastLine: false,
-                    automaticLayout: true,
-                  }}
-                />
+              <div className="mx-4 my-4 min-h-[420px] rounded-lg border border-gray-200 bg-white px-6 py-8 shadow-sm">
+                {!focusedNodeId ? (
+                  <div className="flex flex-col items-center justify-center gap-2 py-20 text-center text-gray-500">
+                    <p className="text-sm font-medium text-gray-700">任务开发</p>
+                    <p className="text-sm">请在上方 DAG 图中点击节点，将显示对应 Airflow DAG 链接。</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4 max-w-xl">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wide text-gray-400">当前表</p>
+                      <p className="mt-1 text-sm font-semibold text-gray-900">
+                        {focusedNodeData?.qualifiedTableName ?? focusedNodeData?.label ?? focusedNodeId}
+                      </p>
+                    </div>
+                    {airflowDagHref ? (
+                      <div className="rounded-lg border border-blue-100 bg-blue-50/80 px-4 py-3">
+                        <p className="text-xs text-gray-600 mb-2">Airflow（新标签页打开）</p>
+                        <a
+                          href={airflowDagHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-800 underline-offset-2 hover:underline"
+                        >
+                          <ExternalLinkIcon className="size-4 shrink-0" aria-hidden />
+                          {focusedNodeData?.airflowDagId}
+                        </a>
+                        <p className="mt-2 text-xs text-gray-500 break-all">{airflowDagHref}</p>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
+                        该节点暂无 AIRFLOW_DAG_ID（通常表示尚未通过本系统发布 ETL，或未同步到 Neo4j）。
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
-              <TaskOperationsTable dagId={dagId} taskFiles={dagView?.nodeIds || []} taskNames={taskNames} />
+              <TaskOperationsTable dagId={dagId} taskNames={taskNames} />
             )}
           </div>
         </div>

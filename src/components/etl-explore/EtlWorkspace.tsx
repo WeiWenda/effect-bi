@@ -1,4 +1,6 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router-dom';
 import { PlusIcon, XIcon } from 'lucide-react';
 import { EtlNewTabPicker, type EtlNewTabChoice } from './EtlNewTabPicker';
 import { EtlNewTaskDialog, type EtlNewTaskConfirmPayload } from './EtlNewTaskDialog';
@@ -23,8 +25,11 @@ import {
 import { parseAlertRulesFromJsonText } from '../../utils/etlAlertRules';
 import { migrateLegacyGraphJsonTextToRuntimeDeps } from '../../utils/etlRuntimeDeps';
 import { migrateTaskOutputPersisted, type EtlTaskOutputPersisted } from '../../utils/etlWorkspaceStorage';
+import { formatDateYMD } from '../../utils/filterTimeRelative';
 
 const VALID_ETL_TASK_TYPES: EtlTaskTypePersisted[] = ['hsql', 'data_import', 'data_export'];
+
+type EtlTabContextMenuState = { tabId: string; x: number; y: number };
 
 function mapVersionToTaskBody(v: EtlTaskVersion, etlTaskType: EtlTaskTypePersisted): EtlTaskDevTabPersistedBody {
   const sched = (v.scheduleJson || {}) as Record<string, unknown>;
@@ -38,6 +43,9 @@ function mapVersionToTaskBody(v: EtlTaskVersion, etlTaskType: EtlTaskTypePersist
   const alertBundle = parseAlertRulesFromJsonText(alertSrc);
   const alertRulesJson = JSON.stringify(alertBundle, null, 2);
   const taskOutput = migrateTaskOutputPersisted(v.taskOutput);
+  const schedDateRaw = typeof sched.scheduleStartDate === 'string' ? sched.scheduleStartDate.trim() : '';
+  const scheduleStartDate =
+    /^\d{4}-\d{2}-\d{2}$/.test(schedDateRaw) ? schedDateRaw : formatDateYMD(new Date());
   return {
     kind: 'task-dev',
     etlTaskType,
@@ -45,6 +53,7 @@ function mapVersionToTaskBody(v: EtlTaskVersion, etlTaskType: EtlTaskTypePersist
     remark: v.remark ?? '',
     sqlMain: v.sqlMain,
     cronExpression: typeof sched.cronExpression === 'string' ? sched.cronExpression : '',
+    scheduleStartDate,
     retries: typeof sched.retries === 'number' ? sched.retries : 1,
     retryDelayMinutes: typeof sched.retryDelayMinutes === 'number' ? sched.retryDelayMinutes : 5,
     alertRulesJson,
@@ -73,6 +82,7 @@ function defaultTitle(kind: EtlTabKindPersisted): string {
 
 export function EtlWorkspace(): React.JSX.Element {
   const { toast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [hydrated, setHydrated] = useState(false);
   const [tabs, setTabs] = useState<EtlWorkspaceTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
@@ -83,6 +93,9 @@ export function EtlWorkspace(): React.JSX.Element {
   const [newEtlHint, setNewEtlHint] = useState('');
   const newEtlPlacementRef = useRef<{ folderId: number | null; hint: string } | null>(null);
   const [focusTaskRequest, setFocusTaskRequest] = useState<{ taskName: string; token: number } | null>(null);
+
+  const tabBodiesRef = useRef(tabBodies);
+  tabBodiesRef.current = tabBodies;
 
   /** Tab strip drag-reorder */
   const [dragTabId, setDragTabId] = useState<string | null>(null);
@@ -149,11 +162,16 @@ export function EtlWorkspace(): React.JSX.Element {
                   ? migrateLegacyGraphJsonTextToRuntimeDeps(legacyGraph)
                   : base.runtimeDepsJsonText;
             const taskOutput: EtlTaskOutputPersisted = migrateTaskOutputPersisted(rawTd.taskOutput ?? null);
+            const rawSchedDate =
+              typeof rawTd.scheduleStartDate === 'string' ? rawTd.scheduleStartDate.trim() : '';
+            const scheduleStartDate =
+              /^\d{4}-\d{2}-\d{2}$/.test(rawSchedDate) ? rawSchedDate : base.scheduleStartDate;
             const td: EtlTaskDevTabPersistedBody = {
               ...base,
               ...rest,
               etlTaskType,
               cronExpression: typeof rawTd.cronExpression === 'string' ? rawTd.cronExpression : base.cronExpression,
+              scheduleStartDate,
               alertRulesJson: typeof rawTd.alertRulesJson === 'string' ? rawTd.alertRulesJson : base.alertRulesJson,
               runtimeDepsJsonText,
               taskOutput,
@@ -180,6 +198,72 @@ export function EtlWorkspace(): React.JSX.Element {
     }, 500);
     return () => window.clearTimeout(t);
   }, [hydrated, tabs, activeTabId, tabBodies]);
+
+  /** 从血缘表元数据等入口：/etl?versionId= — 打开任务并恢复该版本快照 */
+  const versionIdFromUrl = searchParams.get('versionId');
+  useEffect(() => {
+    if (!hydrated || !versionIdFromUrl) return;
+    const versionId = parseInt(versionIdFromUrl, 10);
+    if (Number.isNaN(versionId)) {
+      setSearchParams(
+        prev => {
+          const n = new URLSearchParams(prev);
+          n.delete('versionId');
+          return n;
+        },
+        { replace: true }
+      );
+      return;
+    }
+    const ac = new AbortController();
+    let cancelled = false;
+    void etlAPI
+      .getTaskVersion(versionId, { signal: ac.signal })
+      .then(({ version }) => {
+        if (cancelled) return;
+        const name = version.name.trim();
+        const body = mapVersionToTaskBody(version, 'hsql');
+        const prevBodies = tabBodiesRef.current;
+        const existingId = Object.keys(prevBodies).find(tid => {
+          const b = prevBodies[tid];
+          return b?.kind === 'task-dev' && (b as EtlTaskDevTabPersistedBody).taskName.trim() === name;
+        });
+        if (existingId) {
+          setTabBodies(prev => ({ ...prev, [existingId]: body }));
+          setActiveTabId(existingId);
+          setFocusTaskRequest({ taskName: name, token: Date.now() });
+          return;
+        }
+        const newId = crypto.randomUUID();
+        setTabs(prev => [...prev, { id: newId, kind: 'task-dev', title: name }]);
+        setTabBodies(prev => ({ ...prev, [newId]: body }));
+        setActiveTabId(newId);
+        setFocusTaskRequest({ taskName: name, token: Date.now() });
+      })
+      .catch(err => {
+        if (cancelled) return;
+        const code =
+          err && typeof err === 'object' && 'code' in err ? String((err as { code?: string }).code) : '';
+        if (code === 'ERR_CANCELED') return;
+        console.error(err);
+        toast('无法加载该任务版本', 'error');
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setSearchParams(
+          prev => {
+            const n = new URLSearchParams(prev);
+            n.delete('versionId');
+            return n;
+          },
+          { replace: true }
+        );
+      });
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
+  }, [hydrated, versionIdFromUrl, setSearchParams, toast]);
 
   const openNewTab = useCallback((choice: EtlNewTabChoice) => {
     const id = crypto.randomUUID();
@@ -216,6 +300,56 @@ export function EtlWorkspace(): React.JSX.Element {
     },
     [activeTabId]
   );
+
+  /** 批量关闭标签（保留当前激活逻辑：优先左侧相邻） */
+  const removeTabIds = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    setTabs(prevTabs => {
+      const next = prevTabs.filter(t => !idSet.has(t.id));
+      setActiveTabId(currActive => {
+        if (!currActive || !idSet.has(currActive)) return currActive;
+        const idx = prevTabs.findIndex(t => t.id === currActive);
+        const left = prevTabs
+          .slice(0, idx)
+          .reverse()
+          .find(t => !idSet.has(t.id));
+        const right = prevTabs.slice(idx + 1).find(t => !idSet.has(t.id));
+        return left?.id ?? right?.id ?? next[0]?.id ?? null;
+      });
+      return next;
+    });
+    setTabBodies(prev => {
+      const n = { ...prev };
+      ids.forEach(id => {
+        delete n[id];
+      });
+      return n;
+    });
+  }, []);
+
+  const [tabContextMenu, setTabContextMenu] = useState<EtlTabContextMenuState | null>(null);
+  const tabContextMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!tabContextMenu) return;
+    const closeMenu = () => setTabContextMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeMenu();
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      if (tabContextMenuRef.current?.contains(e.target as Node)) return;
+      closeMenu();
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('scroll', closeMenu, true);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('scroll', closeMenu, true);
+    };
+  }, [tabContextMenu]);
 
   const setAdhocSessionId = useCallback((tabId: string, sessionId: number) => {
     setTabs(prev =>
@@ -288,6 +422,7 @@ export function EtlWorkspace(): React.JSX.Element {
             owner: 'etl',
             emailOnFailure: false,
             cronExpression: def.cronExpression.trim() || '0 0 * * *',
+            scheduleStartDate: def.scheduleStartDate.trim() || formatDateYMD(new Date()),
             retries: def.retries,
             retryDelayMinutes: def.retryDelayMinutes,
           },
@@ -365,6 +500,15 @@ export function EtlWorkspace(): React.JSX.Element {
   const adhocPersisted =
     activeTab && tabBodies[activeTab.id]?.kind === 'adhoc' ? tabBodies[activeTab.id] : undefined;
 
+  /** 左侧目录高亮：当前激活标签为任务开发时，对应任务名 */
+  const activeOpenTaskName = useMemo(() => {
+    if (!activeTabId) return null;
+    const b = tabBodies[activeTabId];
+    if (b?.kind !== 'task-dev') return null;
+    const n = (b as EtlTaskDevTabPersistedBody).taskName?.trim();
+    return n || null;
+  }, [activeTabId, tabBodies]);
+
   return (
     <div className="h-full flex min-h-0 bg-white">
       <EtlLibrarySidebar
@@ -374,6 +518,7 @@ export function EtlWorkspace(): React.JSX.Element {
         onTaskDeleted={handleLibraryTaskDeleted}
         focusTaskRequest={focusTaskRequest}
         onFocusTaskHandled={clearFocusTaskRequest}
+        activeOpenTaskName={activeOpenTaskName}
       />
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
       <div className="flex items-center gap-1 border-b border-gray-200 bg-gray-50/90 shrink-0 overflow-x-auto px-1 py-0.5">
@@ -384,6 +529,11 @@ export function EtlWorkspace(): React.JSX.Element {
           return (
             <div
               key={tab.id}
+              onContextMenu={e => {
+                e.preventDefault();
+                e.stopPropagation();
+                setTabContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY });
+              }}
               onDragOver={e => {
                 if (!dragTabId) return;
                 e.preventDefault();
@@ -506,6 +656,75 @@ export function EtlWorkspace(): React.JSX.Element {
           </div>
         )}
       </div>
+
+      {tabContextMenu &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          (() => {
+            const idx = tabs.findIndex(t => t.id === tabContextMenu.tabId);
+            const vw = typeof window !== 'undefined' ? window.innerWidth : 0;
+            const vh = typeof window !== 'undefined' ? window.innerHeight : 0;
+            const mw = 168;
+            const mh = 132;
+            let left = tabContextMenu.x;
+            let top = tabContextMenu.y;
+            if (left + mw > vw) left = Math.max(8, vw - mw - 8);
+            if (top + mh > vh) top = Math.max(8, vh - mh - 8);
+            const closeLeft = () => {
+              if (idx <= 0) return;
+              removeTabIds(tabs.slice(0, idx).map(t => t.id));
+              setTabContextMenu(null);
+            };
+            const closeRight = () => {
+              if (idx < 0 || idx >= tabs.length - 1) return;
+              removeTabIds(tabs.slice(idx + 1).map(t => t.id));
+              setTabContextMenu(null);
+            };
+            const closeOthers = () => {
+              if (idx < 0 || tabs.length <= 1) return;
+              const keep = tabContextMenu.tabId;
+              removeTabIds(tabs.filter(t => t.id !== keep).map(t => t.id));
+              setTabContextMenu(null);
+            };
+            return (
+              <div
+                ref={tabContextMenuRef}
+                role="menu"
+                className="fixed z-[200] min-w-[168px] rounded-md border border-gray-200 bg-white py-1 shadow-lg text-sm"
+                style={{ left, top }}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={idx <= 0}
+                  className="w-full px-3 py-2 text-left hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
+                  onClick={closeLeft}
+                >
+                  关闭左侧
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={idx < 0 || idx >= tabs.length - 1}
+                  className="w-full px-3 py-2 text-left hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
+                  onClick={closeRight}
+                >
+                  关闭右侧
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={tabs.length <= 1}
+                  className="w-full px-3 py-2 text-left hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
+                  onClick={closeOthers}
+                >
+                  关闭其他
+                </button>
+              </div>
+            );
+          })(),
+          document.body
+        )}
 
       <EtlNewTabPicker open={pickerOpen} onClose={() => setPickerOpen(false)} onChoose={openNewTab} />
       <EtlNewTaskDialog

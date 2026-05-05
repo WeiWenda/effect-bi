@@ -16,8 +16,13 @@ interface SelectProps {
   className?: string;
   disabled?: boolean;
   size?: 'default' | 'sm';
-  /** 为 true 时将下拉渲染到 document.body，避免 Dialog transform 导致定位错位 */
+  /** 为 true 时将下拉渲染到 portal 根节点，避免 Dialog transform 导致定位错位 */
   portal?: boolean;
+  /**
+   * 与 `portal` 一起使用：将下拉挂到此 DOM 节点（须在 Dialog 内容区内）。
+   * 不传则挂到 `document.body`。Dialog 内搜索框需传入，否则 Radix 焦点陷阱无法聚焦输入框。
+   */
+  portalContainer?: HTMLElement | null;
   /** 为 true 时显示搜索框并过滤选项（长列表推荐） */
   searchable?: boolean;
   searchPlaceholder?: string;
@@ -32,6 +37,7 @@ export function Select({
   disabled = false,
   size = 'default',
   portal = false,
+  portalContainer = null,
   searchable = false,
   searchPlaceholder = '搜索…',
 }: SelectProps): React.JSX.Element {
@@ -58,12 +64,25 @@ export function Select({
     if (!isOpen || !portal || !buttonRef.current) return;
     const r = buttonRef.current.getBoundingClientRect();
     const w = Math.max(r.width, 120);
-    const left = Math.min(r.left, window.innerWidth - w - 8);
-    const top = r.bottom + 4;
-    const spaceBelow = window.innerHeight - top - 10;
-    const maxH = Math.max(120, Math.min(320, spaceBelow));
+    let left: number;
+    let top: number;
+    let spaceBelow: number;
+
+    if (portalContainer) {
+      const cr = portalContainer.getBoundingClientRect();
+      left = Math.min(Math.max(4, r.left - cr.left), Math.max(4, cr.width - w - 4));
+      top = r.bottom - cr.top + 4;
+      // 按视口剩余高度算，避免弹窗内按钮贴底时 spaceBelow 过小导致列表几乎不可见
+      spaceBelow = window.innerHeight - r.bottom - 16;
+    } else {
+      left = Math.min(r.left, window.innerWidth - w - 8);
+      top = r.bottom + 4;
+      spaceBelow = window.innerHeight - r.bottom - 14;
+    }
+
+    const maxH = Math.max(120, Math.min(360, Math.max(0, spaceBelow)));
     setPortalLayout({ top, left, width: w, maxH });
-  }, [isOpen, portal, options.length, searchable, searchQuery]);
+  }, [isOpen, portal, portalContainer, options.length, searchable, searchQuery]);
 
   const selectedOption = options.find(opt => opt.value === value);
 
@@ -133,39 +152,51 @@ export function Select({
 
       {isOpen && !disabled && (
         <>
-          <div className="fixed inset-0 z-[140]" aria-hidden onClick={() => setIsOpen(false)} />
+          {/* Dialog 内 portal 时由 portal 内遮罩关闭，避免 fixed 遮罩盖住下拉 */}
+          {!(portal && portalContainer) ? (
+            <div className="fixed inset-0 z-[140]" aria-hidden onClick={() => setIsOpen(false)} />
+          ) : null}
           {portal && typeof document !== 'undefined'
             ? createPortal(
-                <div
-                  className={`fixed z-[150] pointer-events-auto ${dropdownShellCls}`}
-                  style={{
-                    top: portalLayout.top,
-                    left: portalLayout.left,
-                    width: portalLayout.width,
-                    height: portalLayout.maxH,
-                    maxHeight: portalLayout.maxH,
-                  }}
-                  onClick={e => e.stopPropagation()}
-                >
-                  {searchable ? (
-                    <input
-                      type="search"
-                      value={searchQuery}
-                      onChange={e => setSearchQuery(e.target.value)}
-                      placeholder={searchPlaceholder}
-                      className={searchInputCls}
-                      autoComplete="off"
-                      onKeyDown={e => e.stopPropagation()}
+                <>
+                  {portalContainer ? (
+                    <div
+                      className="pointer-events-auto absolute inset-0 z-[140]"
+                      aria-hidden
+                      onClick={() => setIsOpen(false)}
                     />
                   ) : null}
                   <div
-                    className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-                    onWheel={e => e.stopPropagation()}
+                    className={`${portalContainer ? 'absolute' : 'fixed'} z-[150] pointer-events-auto ${dropdownShellCls}`}
+                    style={{
+                      top: portalLayout.top,
+                      left: portalLayout.left,
+                      width: portalLayout.width,
+                      height: portalLayout.maxH,
+                      maxHeight: portalLayout.maxH,
+                    }}
+                    onClick={e => e.stopPropagation()}
                   >
-                    {renderOptionButtons()}
+                    {searchable ? (
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        placeholder={searchPlaceholder}
+                        className={searchInputCls}
+                        autoComplete="off"
+                        onKeyDown={e => e.stopPropagation()}
+                      />
+                    ) : null}
+                    <div
+                      className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+                      onWheel={e => e.stopPropagation()}
+                    >
+                      {renderOptionButtons()}
+                    </div>
                   </div>
-                </div>,
-                document.body
+                </>,
+                portalContainer ?? document.body
               )
             : (
                 <div
@@ -175,7 +206,7 @@ export function Select({
                 >
                   {searchable ? (
                     <input
-                      type="search"
+                      type="text"
                       value={searchQuery}
                       onChange={e => setSearchQuery(e.target.value)}
                       placeholder={searchPlaceholder}

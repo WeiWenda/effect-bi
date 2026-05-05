@@ -42,7 +42,17 @@ export interface TableDetailResponse {
     name: string;
     columns: ColumnInfo[];
     indexes?: IndexInfo[];
+    /** 多级分区：长度 ≥2 时表示存在二级及以上分区字段 */
+    partitioning?: unknown[];
   };
+}
+
+/** Gravitino `partitioning` 数组：仅一项时为一级分区；多项时需填写二级分区 */
+export function gravitinoTableHasSecondaryPartition(
+  table: { partitioning?: unknown[] } | null | undefined
+): boolean {
+  const p = table?.partitioning;
+  return Array.isArray(p) && p.length > 1;
 }
 
 export const gravitinoAPI = {

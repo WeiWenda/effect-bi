@@ -49,6 +49,16 @@ function buildFolderTree(folders: EtlFolder[]): FolderNode[] {
   return sortNodes(roots);
 }
 
+/** 同一文件夹内任务顺序（与版本更新时间无关） */
+function sortEtlTasks(list: EtlTaskListRow[]): EtlTaskListRow[] {
+  return [...list].sort((a, b) => {
+    const da = a.folder_sort_order ?? 0;
+    const db = b.folder_sort_order ?? 0;
+    if (da !== db) return da - db;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 function placementHint(folders: EtlFolder[], folderId: number | null): string {
   if (folderId == null) return '将保存到：未归类（可在左侧目录拖拽调整）';
   const f = folders.find(x => x.id === folderId);
@@ -62,6 +72,8 @@ interface EtlLibrarySidebarProps {
   onTaskDeleted?: (taskName: string) => void;
   focusTaskRequest?: { taskName: string; token: number } | null;
   onFocusTaskHandled?: () => void;
+  /** 当前工作区激活标签正在编辑的任务名（与列表行匹配则高亮） */
+  activeOpenTaskName?: string | null;
 }
 
 export function EtlLibrarySidebar({
@@ -71,6 +83,7 @@ export function EtlLibrarySidebar({
   onTaskDeleted,
   focusTaskRequest,
   onFocusTaskHandled,
+  activeOpenTaskName = null,
 }: EtlLibrarySidebarProps): JSX.Element {
   const { toast } = useToast();
   const [folders, setFolders] = useState<EtlFolder[]>([]);
@@ -307,21 +320,107 @@ export function EtlLibrarySidebar({
   const [dropTargetFolderId, setDropTargetFolderId] = useState<number | null>(null);
   const [dropPosition, setDropPosition] = useState<'before' | 'after' | null>(null);
 
+  const [dragTaskReorderName, setDragTaskReorderName] = useState<string | null>(null);
+  const [dropTaskReorderTarget, setDropTaskReorderTarget] = useState<string | null>(null);
+  const [dropTaskReorderPosition, setDropTaskReorderPosition] = useState<'before' | 'after' | null>(null);
+
   const clearDragUi = () => {
     setDragTaskName(null);
     setDropFolderId(null);
     setDragFolderId(null);
     setDropTargetFolderId(null);
     setDropPosition(null);
+    setDragTaskReorderName(null);
+    setDropTaskReorderTarget(null);
+    setDropTaskReorderPosition(null);
   };
 
   const handleTaskDragStart = (e: DragEvent, name: string) => {
     setDragFolderId(null);
     setDropTargetFolderId(null);
     setDropPosition(null);
+    setDragTaskReorderName(null);
     setDragTaskName(name);
     e.dataTransfer.setData('application/etl-task-name', name);
     e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleTaskReorderDragStart = (e: DragEvent, name: string) => {
+    e.stopPropagation();
+    setDragTaskName(null);
+    setDragFolderId(null);
+    setDropTargetFolderId(null);
+    setDropPosition(null);
+    setDragTaskReorderName(name);
+    e.dataTransfer.setData('application/etl-task-reorder-name', name);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleTaskReorderDragOver = (e: DragEvent, targetName: string) => {
+    if (!dragTaskReorderName) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    setDropTaskReorderTarget(targetName);
+    setDropTaskReorderPosition(e.clientY < midY ? 'before' : 'after');
+  };
+
+  const handleTaskReorderDragLeave = (e: DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDropTaskReorderTarget(null);
+      setDropTaskReorderPosition(null);
+    }
+  };
+
+  const handleTaskReorderDrop = async (
+    targetName: string,
+    folderContextId: number | null,
+    position: 'before' | 'after'
+  ) => {
+    const srcName = dragTaskReorderName;
+    if (!srcName || srcName === targetName) {
+      clearDragUi();
+      return;
+    }
+    const src = tasks.find(t => t.name === srcName);
+    const tgt = tasks.find(t => t.name === targetName);
+    if (!src || !tgt || (src.folder_id ?? null) !== (tgt.folder_id ?? null)) {
+      toast('请在同一目录内调整顺序', 'error');
+      clearDragUi();
+      return;
+    }
+    const siblings = sortEtlTasks(
+      tasks.filter(t => (t.folder_id ?? null) === (folderContextId ?? null))
+    );
+    const rest = siblings.filter(s => s.name !== srcName);
+    const ti = rest.findIndex(s => s.name === targetName);
+    if (ti < 0) {
+      clearDragUi();
+      return;
+    }
+    const insertPos = position === 'before' ? ti : ti + 1;
+    const ordered = [...rest.slice(0, insertPos), src, ...rest.slice(insertPos)];
+    const updates = ordered
+      .map((t, idx) => ({ name: t.name, sortOrder: idx }))
+      .filter(({ name, sortOrder }) => {
+        const prev = tasks.find(x => x.name === name)?.folder_sort_order;
+        return Number(prev ?? 0) !== sortOrder;
+      });
+    try {
+      for (const u of updates) {
+        await etlAPI.patchTaskPlacement({
+          name: u.name,
+          folderId: folderContextId,
+          sortOrder: u.sortOrder,
+        });
+      }
+      await loadData();
+    } catch {
+      toast('排序失败', 'error');
+    } finally {
+      clearDragUi();
+    }
   };
 
   const handleTaskDragEnd = () => {
@@ -343,6 +442,7 @@ export function EtlLibrarySidebar({
   const handleFolderReorderDragStart = (e: DragEvent, folderId: number) => {
     e.stopPropagation();
     setDragTaskName(null);
+    setDragTaskReorderName(null);
     setDropFolderId(null);
     setDragFolderId(folderId);
     e.dataTransfer.setData('application/etl-folder-id', String(folderId));
@@ -444,6 +544,11 @@ export function EtlLibrarySidebar({
       }
       return;
     }
+    if (e.dataTransfer.getData('application/etl-task-reorder-name')) {
+      e.preventDefault();
+      clearDragUi();
+      return;
+    }
     e.preventDefault();
     const name = e.dataTransfer.getData('application/etl-task-name');
     if (name) void handleMoveTask(name, folderId);
@@ -456,12 +561,16 @@ export function EtlLibrarySidebar({
       clearDragUi();
       return;
     }
+    if (e.dataTransfer.getData('application/etl-task-reorder-name')) {
+      clearDragUi();
+      return;
+    }
     const name = e.dataTransfer.getData('application/etl-task-name');
     if (name) void handleMoveTask(name, null);
     clearDragUi();
   };
 
-  const rootTasks = tasks.filter(t => t.folder_id == null);
+  const rootTasks = sortEtlTasks(tasks.filter(t => t.folder_id == null));
 
   const countTasksInFolder = (node: FolderNode): number => {
     const direct = tasks.filter(t => t.folder_id === node.id).length;
@@ -482,6 +591,16 @@ export function EtlLibrarySidebar({
     return (node.children || []).every(c => isAllExpanded(c));
   };
 
+  /** 绿：已发布且最新即发布版；橙：有已发布但存在更新未发；灰：无已发布 */
+  const taskRowIconClass = (row: EtlTaskListRow): string => {
+    const pub = row.published_version_id;
+    const latest = row.latest_version_id;
+    if (pub == null) return 'text-gray-400';
+    if (latest == null) return 'text-green-600';
+    if (pub === latest) return 'text-green-600';
+    return 'text-orange-500';
+  };
+
   const toggleExpandAll = (folderId: number, expand: boolean) => {
     setExpandedFolders(prev => {
       const next = new Set(prev);
@@ -500,33 +619,86 @@ export function EtlLibrarySidebar({
     });
   };
 
-  const renderTaskRow = (row: EtlTaskListRow, depth: number) => (
-    <div
-      key={row.name}
-      data-etl-task-row={row.name}
-      className={`flex items-center gap-2 px-3 py-2 hover:bg-blue-50 cursor-pointer group ${dragTaskName === row.name ? 'opacity-40' : ''}`}
-      style={{ paddingLeft: `${depth * 16 + 28}px` }}
-      onClick={() => onOpenTask(row.name, row.folder_id)}
-      draggable
-      onDragStart={e => handleTaskDragStart(e, row.name)}
-      onDragEnd={handleTaskDragEnd}
-    >
-      <FileCode2Icon className="size-4 text-emerald-600 shrink-0" />
-      <span className="text-sm text-gray-700 flex-1 truncate">{row.name}</span>
-      <button
-        type="button"
-        onClick={e => {
+  const renderTaskRow = (row: EtlTaskListRow, depth: number, folderContextId: number | null) => {
+    const reorderHighlight =
+      dragTaskReorderName &&
+      dropTaskReorderTarget === row.name &&
+      dropTaskReorderPosition === 'before'
+        ? 'border-t-2 border-blue-400'
+        : dragTaskReorderName &&
+            dropTaskReorderTarget === row.name &&
+            dropTaskReorderPosition === 'after'
+          ? 'border-b-2 border-blue-400'
+          : '';
+
+    const isActiveInWorkspace =
+      activeOpenTaskName != null && activeOpenTaskName.trim() === row.name.trim();
+
+    return (
+      <div
+        key={row.name}
+        data-etl-task-row={row.name}
+        aria-current={isActiveInWorkspace ? 'true' : undefined}
+        className={`flex items-center gap-1 px-2 py-2 rounded-md transition-colors group ${reorderHighlight} ${
+          isActiveInWorkspace
+            ? 'bg-blue-50 ring-1 ring-inset ring-blue-400/50 hover:bg-blue-50'
+            : 'hover:bg-blue-50'
+        } ${dragTaskName === row.name || dragTaskReorderName === row.name ? 'opacity-40' : ''}`}
+        style={{ paddingLeft: `${depth * 16 + 8}px` }}
+        onDragOver={e => handleTaskReorderDragOver(e, row.name)}
+        onDragLeave={handleTaskReorderDragLeave}
+        onDrop={e => {
+          e.preventDefault();
           e.stopPropagation();
-          void handleDeleteTask(row.name);
+          if (dragTaskReorderName && dropTaskReorderPosition) {
+            void handleTaskReorderDrop(row.name, folderContextId, dropTaskReorderPosition);
+          }
         }}
-        className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-500 transition-all shrink-0"
-        title="删除任务"
-        aria-label={`删除任务 ${row.name}`}
       >
-        <Trash2Icon className="size-3.5" />
-      </button>
-    </div>
-  );
+        <div
+          className="shrink-0 cursor-grab p-0.5"
+          draggable
+          role="presentation"
+          onClick={e => e.stopPropagation()}
+          onDragStart={e => handleTaskReorderDragStart(e, row.name)}
+          onDragEnd={handleTaskDragEnd}
+        >
+          <GripVerticalIcon className="size-3.5 text-gray-300 group-hover:text-gray-400" />
+        </div>
+        <div
+          className="flex flex-1 min-w-0 items-center gap-2 cursor-pointer"
+          draggable
+          onDragStart={e => handleTaskDragStart(e, row.name)}
+          onDragEnd={handleTaskDragEnd}
+          onClick={() => onOpenTask(row.name, row.folder_id)}
+          title={
+            row.published_version_id == null
+              ? '无已发布版本'
+              : row.latest_version_id == null
+                ? '已发布（未获取到最新版本信息）'
+                : row.published_version_id === row.latest_version_id
+                  ? '最新版本已发布'
+                  : '已有发布版本，存在更新的未发布版本'
+          }
+        >
+          <FileCode2Icon className={`size-4 shrink-0 ${taskRowIconClass(row)}`} aria-hidden />
+          <span className="text-sm text-gray-700 flex-1 truncate">{row.name}</span>
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              void handleDeleteTask(row.name);
+            }}
+            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-500 transition-all shrink-0"
+            title="删除任务"
+            aria-label={`删除任务 ${row.name}`}
+          >
+            <Trash2Icon className="size-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   const renderFolder = (node: FolderNode, depth: number = 0) => {
     const isExpanded = expandedFolders.has(node.id);
@@ -595,7 +767,9 @@ export function EtlLibrarySidebar({
         </div>
         {isExpanded && (
           <div>
-            {tasks.filter(t => t.folder_id === node.id).map(t => renderTaskRow(t, depth + 1))}
+            {sortEtlTasks(tasks.filter(t => t.folder_id === node.id)).map(t =>
+              renderTaskRow(t, depth + 1, node.id)
+            )}
             {node.children?.map(c => renderFolder(c, depth + 1))}
           </div>
         )}
@@ -704,7 +878,7 @@ export function EtlLibrarySidebar({
           onDrop={handleRootDrop}
         >
           {tree.map(n => renderFolder(n))}
-          {rootTasks.map(t => renderTaskRow(t, 0))}
+          {rootTasks.map(t => renderTaskRow(t, 0, null))}
         </div>
       </div>
 

@@ -16,7 +16,7 @@ export function emptyRuntimeDependencyRow(): EtlRuntimeDependencyRow {
     catalog: '',
     database: '',
     table: '',
-    partition: '',
+    partition: '-1 day',
     secondaryPartitions: '',
   };
 }

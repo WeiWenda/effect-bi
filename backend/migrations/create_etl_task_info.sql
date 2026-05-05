@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS etl_task_info (
   database_name VARCHAR(256),
   owner_name VARCHAR(256),
   owner_email VARCHAR(256),
+  -- 任务库目录树位置（外键在 create_etl_folders.sql 中 etl_folders 建表后补上）
+  folder_id INTEGER,
+  folder_sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT uq_etl_task_info_name UNIQUE (name)
@@ -18,23 +21,3 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_etl_task_info_neo4j_node_id
   WHERE neo4j_node_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_etl_task_info_table_name ON etl_task_info (table_name);
-
-CREATE OR REPLACE FUNCTION update_etl_task_info_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = CURRENT_TIMESTAMP;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger WHERE tgname = 'update_etl_task_info_updated_at'
-  ) THEN
-    CREATE TRIGGER update_etl_task_info_updated_at
-      BEFORE UPDATE ON etl_task_info
-      FOR EACH ROW
-      EXECUTE FUNCTION update_etl_task_info_updated_at();
-  END IF;
-END $$;

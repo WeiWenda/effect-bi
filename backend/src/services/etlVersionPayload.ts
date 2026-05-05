@@ -33,6 +33,10 @@ export function buildAirflowOptionsForDag(scheduleJson: unknown, alertJson: unkn
     retryDelayMinutes: typeof s.retryDelayMinutes === 'number' ? s.retryDelayMinutes : 5,
     emailOnFailure: s.emailOnFailure === true,
     cronExpression: typeof s.cronExpression === 'string' ? s.cronExpression : '',
+    scheduleStartDate:
+      typeof s.scheduleStartDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.scheduleStartDate.trim())
+        ? s.scheduleStartDate.trim()
+        : '',
     alertRules: rules,
   };
 }

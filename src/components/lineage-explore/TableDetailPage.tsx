@@ -1,17 +1,18 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Table as TableIcon, ChevronUp, ChevronDown } from 'lucide-react';
-import { DDLTab } from './DDLTab';
+import { TableMetaTab } from './TableMetaTab';
 import { LineageGraphTab } from './LineageGraphTab';
 import { lineageAPI } from '../../services/lineageApi';
 import {
   lineageEntityRouteTableName,
   lineageTableDescription,
   lineageTableDisplayName,
+  lineageTableGravitinoLocation,
   lineageTableLayer,
 } from '../../services/lineageNodeMeta';
 
-type TabType = 'ddl' | 'lineage';
+type TabType = 'meta' | 'lineage';
 
 export function TableDetailPage(): React.JSX.Element {
   const { tableName } = useParams<{ tableName: string }>();
@@ -28,7 +29,7 @@ export function TableDetailPage(): React.JSX.Element {
     routeTableName: string;
     description: string;
     layer: string;
-    ddl: string;
+    gravitinoLocation: { catalog: string; database: string; table: string } | null;
     entityId: string;
   } | null>(null);
 
@@ -47,7 +48,7 @@ export function TableDetailPage(): React.JSX.Element {
             routeTableName: lineageEntityRouteTableName(p),
             description: lineageTableDescription(p),
             layer: lineageTableLayer(p),
-            ddl: typeof p.ddl === 'string' ? p.ddl : '',
+            gravitinoLocation: lineageTableGravitinoLocation(p),
             entityId: entity.id,
           });
         } else {
@@ -138,14 +139,14 @@ export function TableDetailPage(): React.JSX.Element {
           {/* Tab headers */}
           <div className="flex border-b border-gray-200">
             <button
-              onClick={() => setActiveTab('ddl')}
+              onClick={() => setActiveTab('meta')}
               className={`px-6 py-4 text-sm font-medium transition-colors ${
-                activeTab === 'ddl'
+                activeTab === 'meta'
                   ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50'
                   : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
               }`}
             >
-              DDL 解析
+              表元数据
             </button>
             <button
               onClick={() => setActiveTab('lineage')}
@@ -155,7 +156,7 @@ export function TableDetailPage(): React.JSX.Element {
                   : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
               }`}
             >
-              血缘可视化
+              数据血缘
             </button>
             <div className="ml-auto pr-4 flex items-center">
               <button
@@ -174,7 +175,7 @@ export function TableDetailPage(): React.JSX.Element {
 
           {/* Tab content */}
           <div className="flex-1 overflow-auto">
-            {activeTab === 'ddl' && <DDLTab ddl={tableData.ddl} />}
+            {activeTab === 'meta' && <TableMetaTab gravitinoLocation={tableData.gravitinoLocation} />}
             {activeTab === 'lineage' && (
               <LineageGraphTab
                 entityId={tableData.entityId}

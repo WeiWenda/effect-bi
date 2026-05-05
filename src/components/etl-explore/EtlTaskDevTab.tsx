@@ -21,6 +21,9 @@ import { EtlQualityRulesModal } from './EtlQualityRulesModal';
 import { EtlAlertRulesModal } from './EtlAlertRulesModal';
 import { formatAlertRulesSummaryLines, parseAlertRulesFromJsonText } from '../../utils/etlAlertRules';
 import { GravitinoTripleSelect } from './GravitinoTripleSelect';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+import { formatDateYMD, parseYmdToLocalDate } from '../../utils/filterTimeRelative';
 
 const TASK_TYPE_LABEL: Record<string, string> = {
   hsql: 'HSQL',
@@ -110,6 +113,7 @@ export function EtlTaskDevTab({ body, onBodyChange, onTaskSaved }: EtlTaskDevTab
       runtimeDepsJsonText: body.runtimeDepsJsonText,
       qualityRulesJson: body.qualityRulesJson,
       cronExpression: body.cronExpression,
+      scheduleStartDate: body.scheduleStartDate,
       retries: body.retries,
       retryDelayMinutes: body.retryDelayMinutes,
       alertRulesJson: body.alertRulesJson,
@@ -119,6 +123,7 @@ export function EtlTaskDevTab({ body, onBodyChange, onTaskSaved }: EtlTaskDevTab
       body.runtimeDepsJsonText,
       body.qualityRulesJson,
       body.cronExpression,
+      body.scheduleStartDate,
       body.retries,
       body.retryDelayMinutes,
       body.alertRulesJson,
@@ -141,6 +146,10 @@ export function EtlTaskDevTab({ body, onBodyChange, onTaskSaved }: EtlTaskDevTab
             ? v.qualityRulesJson
             : JSON.stringify(v.qualityRulesJson ?? { sqlQueries: [], rules: [] }, null, 2),
         cronExpression: typeof sched.cronExpression === 'string' ? sched.cronExpression : '',
+        scheduleStartDate:
+          typeof sched.scheduleStartDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(sched.scheduleStartDate.trim())
+            ? sched.scheduleStartDate.trim()
+            : formatDateYMD(new Date()),
         retries: typeof sched.retries === 'number' ? sched.retries : 1,
         retryDelayMinutes: typeof sched.retryDelayMinutes === 'number' ? sched.retryDelayMinutes : 5,
         alertRulesJson: JSON.stringify(alertBundle, null, 2),
@@ -325,6 +334,24 @@ export function EtlTaskDevTab({ body, onBodyChange, onTaskSaved }: EtlTaskDevTab
                 value={body.cronExpression}
                 onChange={e => patch({ cronExpression: e.target.value })}
                 placeholder="0 0 * * *"
+              />
+            </label>
+            <label className="block mb-1">
+              <span className="text-gray-500">调度开始时间</span>
+              <DatePicker
+                selected={parseYmdToLocalDate(
+                  /^\d{4}-\d{2}-\d{2}$/.test(body.scheduleStartDate.trim())
+                    ? body.scheduleStartDate.trim()
+                    : formatDateYMD(new Date())
+                )}
+                onChange={(d: Date | null) =>
+                  patch({ scheduleStartDate: d ? formatDateYMD(d) : formatDateYMD(new Date()) })
+                }
+                dateFormat="yyyy-MM-dd"
+                className="mt-0.5 w-full border border-gray-200 rounded px-1.5 py-1 text-[11px] box-border"
+                wrapperClassName="block w-full"
+                portalId="root"
+                popperClassName="z-[1100]"
               />
             </label>
             <label className="block mb-1">

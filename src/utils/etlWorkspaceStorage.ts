@@ -1,4 +1,5 @@
 import localforage from 'localforage';
+import { formatDateYMD } from './filterTimeRelative';
 import { migrateLegacyGraphJsonTextToRuntimeDeps } from './etlRuntimeDeps';
 
 export type EtlTabKindPersisted = 'ddl-placeholder' | 'task-dev' | 'adhoc';
@@ -49,6 +50,8 @@ export interface EtlTaskDevTabPersistedBody {
   sqlMain: string;
   /** crontab，保存版本时必填 */
   cronExpression: string;
+  /** DAG 调度起始日 YYYY-MM-DD，默认当日，写入 schedule_json.scheduleStartDate */
+  scheduleStartDate: string;
   retries: number;
   retryDelayMinutes: number;
   /** 任务报警（与 API alertJson / DB alert_json 同步） */
@@ -124,6 +127,7 @@ export function defaultTaskDevBody(): EtlTaskDevTabPersistedBody {
     remark: '',
     sqlMain: '-- ETL 任务 SQL\nSELECT 1',
     cronExpression: '',
+    scheduleStartDate: formatDateYMD(new Date()),
     retries: 1,
     retryDelayMinutes: 5,
     alertRulesJson: '{"rules":[]}',

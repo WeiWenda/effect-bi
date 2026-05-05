@@ -22,11 +22,10 @@ async function runMigration() {
     'create_etl_adhoc.sql',
     'create_etl_task_versions.sql',
     'create_etl_airflow_deployments.sql',
-    'drop_etl_airflow_deployments_dag_file_path.sql',
     'create_etl_folders.sql',
     'create_etl_table_partition_detail.sql',
     'create_etl_task_run_instances.sql',
-    'create_etl_alert_dispatch.sql'
+    'create_etl_alert_dispatch.sql',
     ];
 
   const client = await pool.connect();
