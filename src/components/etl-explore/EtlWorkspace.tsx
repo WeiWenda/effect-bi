@@ -55,7 +55,7 @@ function mapVersionToTaskBody(v: EtlTaskVersion, etlTaskType: EtlTaskTypePersist
     cronExpression: typeof sched.cronExpression === 'string' ? sched.cronExpression : '',
     scheduleStartDate,
     retries: typeof sched.retries === 'number' ? sched.retries : 1,
-    retryDelayMinutes: typeof sched.retryDelayMinutes === 'number' ? sched.retryDelayMinutes : 5,
+    retryDelayMinutes: typeof sched.retryDelayMinutes === 'number' ? sched.retryDelayMinutes : 1,
     alertRulesJson,
     qualityRulesJson: qrText,
     runtimeDepsJsonText,
@@ -264,6 +264,70 @@ export function EtlWorkspace(): React.JSX.Element {
       ac.abort();
     };
   }, [hydrated, versionIdFromUrl, setSearchParams, toast]);
+
+  /** 链路治理等入口：/etl?task= — 按逻辑名打开任务开发 Tab 并高亮左侧目录 */
+  const taskFromUrl = searchParams.get('task');
+  useEffect(() => {
+    if (!hydrated || taskFromUrl === null) return;
+    const normalized = taskFromUrl.trim();
+    if (!normalized) {
+      setSearchParams(
+        prev => {
+          const n = new URLSearchParams(prev);
+          n.delete('task');
+          return n;
+        },
+        { replace: true }
+      );
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const prevBodies = tabBodiesRef.current;
+        const existingId = Object.keys(prevBodies).find(tid => {
+          const b = prevBodies[tid];
+          return b?.kind === 'task-dev' && (b as EtlTaskDevTabPersistedBody).taskName.trim() === normalized;
+        });
+        if (existingId) {
+          setActiveTabId(existingId);
+          setFocusTaskRequest({ taskName: normalized, token: Date.now() });
+          return;
+        }
+        const { versions } = await etlAPI.listTaskVersions(normalized);
+        if (cancelled) return;
+        const v = versions[0];
+        if (!v) {
+          toast('未找到任务版本', 'error');
+          return;
+        }
+        const id = crypto.randomUUID();
+        const body = mapVersionToTaskBody(v, 'hsql');
+        setTabs(prev => [...prev, { id, kind: 'task-dev', title: normalized }]);
+        setTabBodies(prev => ({ ...prev, [id]: body }));
+        setActiveTabId(id);
+        setFocusTaskRequest({ taskName: normalized, token: Date.now() });
+      } catch (e) {
+        if (cancelled) return;
+        console.error(e);
+        toast('打开任务失败', 'error');
+      } finally {
+        if (!cancelled) {
+          setSearchParams(
+            prev => {
+              const n = new URLSearchParams(prev);
+              n.delete('task');
+              return n;
+            },
+            { replace: true }
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, taskFromUrl, setSearchParams, toast]);
 
   const openNewTab = useCallback((choice: EtlNewTabChoice) => {
     const id = crypto.randomUUID();

@@ -146,7 +146,7 @@ export function EtlTaskVersionManageDialog({
         parts.push('Airflow 已开启调度');
       }
       if ('ok' in airflowBackfill && airflowBackfill.ok) {
-        parts.push('已发起未完成区间回填');
+        parts.push(`已发起未完成区间回填（max_active_runs=${airflowBackfill.maxActiveRuns}）`);
       }
       toast(parts.join('，'), 'success');
       if ('ok' in airflowBackfill && airflowBackfill.ok === false) {

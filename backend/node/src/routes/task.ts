@@ -151,14 +151,14 @@ router.get('/dag/:dagId', async (req: Request, res: Response): Promise<void> => 
       const matchRows = await pool.query(
         `
         SELECT i.id AS etl_task_id,
-               COALESCE(NULLIF(TRIM(i.catalog_name), ''), $dc) AS cnorm,
+               COALESCE(NULLIF(TRIM(i.catalog_name), ''), $4) AS cnorm,
                i.database_name AS database_name,
                i.table_name AS table_name
         FROM unnest($1::text[], $2::text[], $3::text[]) AS t(s_cat, s_db, s_tb)
         JOIN etl_task_info i
           ON i.database_name = t.s_db
          AND i.table_name = t.s_tb
-         AND COALESCE(NULLIF(TRIM(i.catalog_name), ''), $dc) = COALESCE(NULLIF(TRIM(t.s_cat), ''), $dc)
+         AND COALESCE(NULLIF(TRIM(i.catalog_name), ''), $4) = COALESCE(NULLIF(TRIM(t.s_cat), ''), $4)
         `,
         [cats, dbs, tabs, dc]
       );

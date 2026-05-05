@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 #
-# 一键启停：Vite 前端、Node 主后端（ETL DAG 由后端进程内生成并可选写入 AIRFLOW_HOME/dags）。
+# 一键启停：Vite 前端、Node 主后端（backend/node）、LangGraph FastAPI（backend/langgraph）。
+# ETL DAG 等仍由 Node 进程内生成并可选写入 AIRFLOW_HOME/dags。
 #
 # 用法:
 #   ./scripts/dev-services.sh start|stop|restart|status
 # 或在仓库根目录: npm run dev:restart  （等同 restart）
 #
 # 可选环境变量:
-#   FRONTEND_PORT   默认 5173
-#   BACKEND_PORT    Node 监听端口，默认 8000（与 vite.config.ts 里 /api proxy 一致；若用 3001 请 export BACKEND_PORT=3001 并改 proxy）
+#   FRONTEND_PORT           默认 5173
+#   BACKEND_PORT            Node 监听端口，默认 3001（与 vite /api 代理一致）
+#   LANGGRAPH_PORT          LangGraph uvicorn 端口，默认 8001（与 vite /langgraph 代理一致）
+#   VITE_LANGGRAPH_PROXY_TARGET  若单独运行 vite 且 LangGraph 非本机 8001，可在仓库根 .env 中设置
 #
 # PID 与日志目录: <repo>/.dev-pids/
 #
@@ -21,6 +24,11 @@ mkdir -p "$PID_DIR"
 
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 BACKEND_PORT="${BACKEND_PORT:-3001}"
+LANGGRAPH_PORT="${LANGGRAPH_PORT:-8001}"
+
+NODE_BACKEND_DIR="$ROOT/backend/node"
+LANGGRAPH_DIR="$ROOT/backend/langgraph"
+
 log() { echo "[dev-services] $*"; }
 
 is_running() {
@@ -70,8 +78,47 @@ stop_one() {
 cmd_stop() {
   log "停止全部服务…"
   stop_one "vite"
+  stop_one "langgraph"
   stop_one "node-backend"
   log "已全部停止。"
+}
+
+start_langgraph() {
+  local p
+  p=$(read_pid "langgraph")
+  if is_running "$p"; then
+    log "langgraph 已在运行 (pid=${p})，跳过。"
+    return 0
+  fi
+
+  if [[ ! -d "$LANGGRAPH_DIR" ]]; then
+    log "跳过 langgraph：目录不存在 ($LANGGRAPH_DIR)"
+    return 0
+  fi
+
+  if ! command -v uv >/dev/null 2>&1 && [[ ! -x "$LANGGRAPH_DIR/.venv/bin/uvicorn" ]]; then
+    log "跳过 langgraph：未找到命令 uv，且不存在 $LANGGRAPH_DIR/.venv/bin/uvicorn（请在 backend/langgraph 执行 uv sync）"
+    return 0
+  fi
+
+  log "启动 langgraph (PORT=${LANGGRAPH_PORT})…"
+  (
+    cd "$LANGGRAPH_DIR"
+    if [[ -f .env.development ]]; then
+      set -a
+      # shellcheck disable=SC1091
+      source ./.env.development
+      set +a
+    fi
+    export PORT="$LANGGRAPH_PORT"
+    if command -v uv >/dev/null 2>&1; then
+      exec uv run uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port "$PORT"
+    else
+      exec ./.venv/bin/uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port "$PORT"
+    fi
+  ) >>"$PID_DIR/langgraph.log" 2>&1 &
+  echo $! >"$PID_DIR/langgraph.pid"
+  log "langgraph pid=$(cat "$PID_DIR/langgraph.pid") 日志: $PID_DIR/langgraph.log"
 }
 
 cmd_start() {
@@ -83,15 +130,21 @@ cmd_start() {
   if is_running "$p"; then
     log "node-backend 已在运行 (pid=${p})，跳过。"
   else
+    if [[ ! -d "$NODE_BACKEND_DIR" ]]; then
+      log "错误: Node 后端目录不存在: $NODE_BACKEND_DIR" >&2
+      exit 1
+    fi
     log "启动 node-backend (PORT=${BACKEND_PORT})…"
     (
-      cd "$ROOT/backend"
+      cd "$NODE_BACKEND_DIR"
       export PORT="$BACKEND_PORT"
       npm run dev >>"$PID_DIR/node-backend.log" 2>&1
     ) &
     echo $! >"$PID_DIR/node-backend.pid"
     log "node-backend pid=$(cat "$PID_DIR/node-backend.pid") 日志: $PID_DIR/node-backend.log"
   fi
+
+  start_langgraph
 
   p=$(read_pid "vite")
   if is_running "$p"; then
@@ -100,17 +153,18 @@ cmd_start() {
     log "启动 vite (port=${FRONTEND_PORT})…"
     (
       cd "$ROOT"
+      export VITE_LANGGRAPH_PROXY_TARGET="http://127.0.0.1:${LANGGRAPH_PORT}"
       npm run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT"
     ) >>"$PID_DIR/vite.log" 2>&1 &
     echo $! >"$PID_DIR/vite.pid"
     log "vite pid=$(cat "$PID_DIR/vite.pid") 日志: $PID_DIR/vite.log"
   fi
 
-  log "完成。前端 http://127.0.0.1:${FRONTEND_PORT}/  ·  Node API http://127.0.0.1:${BACKEND_PORT}/"
+  log "完成。前端 http://127.0.0.1:${FRONTEND_PORT}/  ·  Node API http://127.0.0.1:${BACKEND_PORT}/  ·  LangGraph http://127.0.0.1:${LANGGRAPH_PORT}/"
 }
 
 cmd_status() {
-  for name in node-backend vite; do
+  for name in node-backend langgraph vite; do
     local pid
     pid=$(read_pid "$name")
     if [[ -z "$pid" ]]; then

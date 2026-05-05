@@ -30,7 +30,7 @@ export function buildAirflowOptionsForDag(scheduleJson: unknown, alertJson: unkn
   return {
     owner: typeof s.owner === 'string' ? s.owner : 'etl',
     retries: typeof s.retries === 'number' ? s.retries : 1,
-    retryDelayMinutes: typeof s.retryDelayMinutes === 'number' ? s.retryDelayMinutes : 5,
+    retryDelayMinutes: typeof s.retryDelayMinutes === 'number' ? s.retryDelayMinutes : 1,
     emailOnFailure: s.emailOnFailure === true,
     cronExpression: typeof s.cronExpression === 'string' ? s.cronExpression : '',
     scheduleStartDate:

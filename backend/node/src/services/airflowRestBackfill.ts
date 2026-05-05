@@ -27,9 +27,9 @@ function scheduleStartAsUtcDate(scheduleStartDateIso: string): Date {
 }
 
 export type PublishBackfillResult =
-  | { skipped: true; reason: string }
-  | { ok: true; backfillId: number }
-  | { ok: false; error: string };
+  | { skipped: true; reason: string; maxActiveRuns: number }
+  | { ok: true; backfillId: number; maxActiveRuns: number }
+  | { ok: false; error: string; maxActiveRuns: number };
 
 function reprocessBehavior(): 'none' | 'failed' | 'completed' {
   const raw = (process.env.ETL_AIRFLOW_BACKFILL_REPROCESS || 'failed').trim().toLowerCase();
@@ -37,13 +37,27 @@ function reprocessBehavior(): 'none' | 'failed' | 'completed' {
   return 'failed';
 }
 
-function maxActiveRuns(): number {
-  const n = parseInt(process.env.ETL_AIRFLOW_BACKFILL_MAX_ACTIVE_RUNS || '16', 10);
-  if (Number.isNaN(n) || n < 1) return 16;
+/**
+ * 单次回填内允许并行 DAG Run 数（写入 POST /api/v2/backfills 的 max_active_runs）。
+ * 须配置在 backend/.env（由 server 入口 loadEnv 加载），修改后需重启后端进程。
+ */
+export function readBackfillMaxActiveRuns(): number {
+  const raw = process.env.ETL_AIRFLOW_BACKFILL_MAX_ACTIVE_RUNS;
+  if (raw === undefined || raw === '') {
+    return 16;
+  }
+  const trimmed = raw.trim().replace(/^["']|["']$/g, '');
+  const n = parseInt(trimmed, 10);
+  if (Number.isNaN(n) || n < 1) {
+    console.warn(
+      `[ETL backfill] ETL_AIRFLOW_BACKFILL_MAX_ACTIVE_RUNS=${JSON.stringify(raw)} is invalid; using 16`
+    );
+    return 16;
+  }
   return Math.min(n, 256);
 }
 
-function buildBackfillPayload(dagId: string, from: Date, to: Date) {
+function buildBackfillPayload(dagId: string, from: Date, to: Date, maxActiveRuns: number) {
   return {
     dag_id: dagId,
     from_date: from.toISOString(),
@@ -51,7 +65,7 @@ function buildBackfillPayload(dagId: string, from: Date, to: Date) {
     run_backwards: false,
     dag_run_conf: {} as Record<string, unknown>,
     reprocess_behavior: reprocessBehavior(),
-    max_active_runs: maxActiveRuns(),
+    max_active_runs: maxActiveRuns,
     run_on_latest_version: true,
   };
 }
@@ -92,16 +106,18 @@ export async function triggerBackfillForPublishedDag(params: {
   scheduleStartDateIso: string;
   cronExpression: string;
 }): Promise<PublishBackfillResult> {
+  const maxActiveRuns = readBackfillMaxActiveRuns();
+
   if (!isAirflowRestConfigured()) {
-    return { skipped: true, reason: 'rest_not_configured' };
+    return { skipped: true, reason: 'rest_not_configured', maxActiveRuns };
   }
   if (getAirflowApiVersion() !== 'v2') {
-    return { skipped: true, reason: 'api_v1_no_backfill' };
+    return { skipped: true, reason: 'api_v1_no_backfill', maxActiveRuns };
   }
 
   const cron = (params.cronExpression || '').trim();
   if (!cron) {
-    return { skipped: true, reason: 'no_schedule' };
+    return { skipped: true, reason: 'no_schedule', maxActiveRuns };
   }
 
   const base = getAirflowRestBaseUrl();
@@ -110,7 +126,7 @@ export async function triggerBackfillForPublishedDag(params: {
     authHeader = await buildAirflowAuthorizationHeader();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: msg };
+    return { ok: false, error: msg, maxActiveRuns };
   }
 
   const headers: Record<string, string> = {
@@ -124,14 +140,14 @@ export async function triggerBackfillForPublishedDag(params: {
   const from = scheduleStartAsUtcDate(params.scheduleStartDateIso);
   const to = new Date();
   if (from.getTime() >= to.getTime()) {
-    return { skipped: true, reason: 'no_time_window' };
+    return { skipped: true, reason: 'no_time_window', maxActiveRuns };
   }
 
-  const payload = buildBackfillPayload(params.dagId, from, to);
+  const payload = buildBackfillPayload(params.dagId, from, to, maxActiveRuns);
 
   const dry = await fetchDryRunWouldCreateRuns(base, headers, payload);
   if (dry === false) {
-    return { skipped: true, reason: 'nothing_to_backfill' };
+    return { skipped: true, reason: 'nothing_to_backfill', maxActiveRuns };
   }
 
   const createUrl = `${base}/api/v2/backfills`;
@@ -156,7 +172,7 @@ export async function triggerBackfillForPublishedDag(params: {
         } catch {
           /* ignore */
         }
-        return { ok: true, backfillId: id };
+        return { ok: true, backfillId: id, maxActiveRuns };
       }
 
       lastErr = `HTTP ${res.status}: ${text.slice(0, 300)}`;
@@ -164,16 +180,16 @@ export async function triggerBackfillForPublishedDag(params: {
         await new Promise(r => setTimeout(r, delayMs));
         continue;
       }
-      return { ok: false, error: lastErr };
+      return { ok: false, error: lastErr, maxActiveRuns };
     } catch (e) {
       lastErr = e instanceof Error ? e.message : String(e);
       if (attempt < maxAttempts) {
         await new Promise(r => setTimeout(r, delayMs));
         continue;
       }
-      return { ok: false, error: lastErr };
+      return { ok: false, error: lastErr, maxActiveRuns };
     }
   }
 
-  return { ok: false, error: lastErr };
+  return { ok: false, error: lastErr, maxActiveRuns };
 }

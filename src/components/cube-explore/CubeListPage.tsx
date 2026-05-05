@@ -117,8 +117,18 @@ export function CubeListPage(): React.JSX.Element {
       setCubes(prev => prev.filter(c => c.name !== cubeToDelete.name));
       setDeleteDialogOpen(false);
       setCubeToDelete(null);
-    } catch {
-      toast('删除失败', 'error');
+    } catch (err: unknown) {
+      const ax = err as { response?: { status?: number; data?: { error?: string; dashboards?: { id: number; name: string }[] } } };
+      const status = ax.response?.status;
+      const data = ax.response?.data;
+      if (status === 409 && data?.dashboards?.length) {
+        const names = data.dashboards.map(d => d.name).filter(Boolean).join('、');
+        toast(names ? `${data.error}：${names}` : (data.error ?? '无法删除'), 'error');
+      } else if (data?.error) {
+        toast(data.error, 'error');
+      } else {
+        toast('删除失败', 'error');
+      }
     } finally {
       setDeleting(false);
     }

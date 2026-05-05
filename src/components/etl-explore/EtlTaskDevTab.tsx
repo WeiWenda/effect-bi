@@ -151,7 +151,7 @@ export function EtlTaskDevTab({ body, onBodyChange, onTaskSaved }: EtlTaskDevTab
             ? sched.scheduleStartDate.trim()
             : formatDateYMD(new Date()),
         retries: typeof sched.retries === 'number' ? sched.retries : 1,
-        retryDelayMinutes: typeof sched.retryDelayMinutes === 'number' ? sched.retryDelayMinutes : 5,
+        retryDelayMinutes: typeof sched.retryDelayMinutes === 'number' ? sched.retryDelayMinutes : 1,
         alertRulesJson: JSON.stringify(alertBundle, null, 2),
         lastVersionId: v.id,
         dryResult: null,

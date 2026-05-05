@@ -14,6 +14,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { dagAPI, DagView } from '../../services/dagApi';
+import { etlAPI } from '../../services/etlApi';
 import { lineageAPI } from '../../services/lineageApi';
 import {
   lineageTableDescription,
@@ -30,6 +31,10 @@ interface DagDetailPageProps {
 
 interface NodeData {
   label: string;
+  /** 血缘三元组（解析 ETL 逻辑任务名） */
+  catalogName?: string;
+  databaseName?: string;
+  tableName?: string;
   /** catalog.database.table，运维表等展示用 */
   qualifiedTableName?: string;
   /** Neo4j Table，已发布 ETL 同步的 DAG id，如 auto_generate_14 */
@@ -138,7 +143,7 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
   const [loading, setLoading] = useState(true);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const [activeTab, setActiveTab] = useState<'development' | 'operations'>('development');
+  const [activeTab, setActiveTab] = useState<'development' | 'operations'>('operations');
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
 
@@ -229,6 +234,9 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
               position: { x: 0, y: 0 },
               data: {
                 label: nodeName,
+                catalogName: catalogRaw || undefined,
+                databaseName: databaseRaw || undefined,
+                tableName: tableRaw || undefined,
                 qualifiedTableName,
                 airflowDagId: airflowDagIdRaw,
                 layer,
@@ -278,6 +286,11 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
     setActiveTab(tab);
   };
 
+  /** 任务运维表行 → 仅与上方图中节点同步选中（不移动视口、不切 Tab） */
+  const handleSelectNodeFromOperations = useCallback((nodeId: string) => {
+    setFocusedNodeId(nodeId);
+  }, []);
+
   const nodeTypes = createNodeTypes(handleNodeClick);
 
   // 运维表：优先 catalog.database.table；否则退回血缘展示名
@@ -298,6 +311,58 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
   const airflowDagHref =
     focusedNodeData?.airflowDagId != null && focusedNodeData.airflowDagId !== ''
       ? `${AIRFLOW_UI_BASE}/dags/${encodeURIComponent(focusedNodeData.airflowDagId)}`
+      : null;
+
+  const [etlTaskNameResolved, setEtlTaskNameResolved] = useState<string | null>(null);
+  const [etlResolveState, setEtlResolveState] = useState<'idle' | 'loading' | 'ok' | 'notfound' | 'error'>(
+    'idle'
+  );
+
+  useEffect(() => {
+    const db = focusedNodeData?.databaseName?.trim() ?? '';
+    const tb = focusedNodeData?.tableName?.trim() ?? '';
+    const cat = focusedNodeData?.catalogName?.trim() ?? '';
+
+    if (!db || !tb) {
+      setEtlTaskNameResolved(null);
+      setEtlResolveState('idle');
+      return;
+    }
+
+    const ac = new AbortController();
+    setEtlResolveState('loading');
+    setEtlTaskNameResolved(null);
+
+    void (async () => {
+      try {
+        const res = await etlAPI.getTaskNameByOutputTable(cat, db, tb, { signal: ac.signal });
+        const name = res?.name?.trim();
+        if (!name) {
+          setEtlTaskNameResolved(null);
+          setEtlResolveState('notfound');
+          return;
+        }
+        setEtlTaskNameResolved(name);
+        setEtlResolveState('ok');
+      } catch (e) {
+        if (ac.signal.aborted) return;
+        console.error(e);
+        setEtlTaskNameResolved(null);
+        setEtlResolveState('error');
+      }
+    })();
+
+    return () => ac.abort();
+  }, [
+    focusedNodeId,
+    focusedNodeData?.catalogName,
+    focusedNodeData?.databaseName,
+    focusedNodeData?.tableName,
+  ]);
+
+  const etlTaskDevHref =
+    etlResolveState === 'ok' && etlTaskNameResolved
+      ? `/etl?task=${encodeURIComponent(etlTaskNameResolved)}`
       : null;
 
   if (loading) {
@@ -380,7 +445,10 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
                 {!focusedNodeId ? (
                   <div className="flex flex-col items-center justify-center gap-2 py-20 text-center text-gray-500">
                     <p className="text-sm font-medium text-gray-700">任务开发</p>
-                    <p className="text-sm">请在上方 DAG 图中点击节点，将显示对应 Airflow DAG 链接。</p>
+                    <p className="text-sm">
+                      请在上方 DAG 图中点击节点查看 Airflow DAG 与 ETL 任务开发链接。若在「任务运维」中已点击任务行与图中节点同步选中，可切换到本 Tab
+                      查看同一节点的跳转链接。
+                    </p>
                   </div>
                 ) : (
                   <div className="space-y-4 max-w-xl">
@@ -409,11 +477,41 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
                         该节点暂无 AIRFLOW_DAG_ID（通常表示尚未通过本系统发布 ETL，或未同步到 Neo4j）。
                       </p>
                     )}
+                    {etlResolveState === 'loading' && (
+                      <p className="text-sm text-gray-500">正在解析 ETL 任务…</p>
+                    )}
+                    {etlTaskDevHref ? (
+                      <div className="rounded-lg border border-emerald-100 bg-emerald-50/80 px-4 py-3">
+                        <p className="text-xs text-gray-600 mb-2">ETL 任务开发（新标签页打开并定位任务）</p>
+                        <a
+                          href={etlTaskDevHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 text-sm font-medium text-emerald-700 hover:text-emerald-900 underline-offset-2 hover:underline"
+                        >
+                          <ExternalLinkIcon className="size-4 shrink-0" aria-hidden />
+                          {etlTaskNameResolved}
+                        </a>
+                        <p className="mt-2 text-xs text-gray-500 break-all">{etlTaskDevHref}</p>
+                      </div>
+                    ) : etlResolveState === 'notfound' ? (
+                      <p className="text-sm text-gray-600 bg-gray-50 border border-gray-100 rounded-md px-3 py-2">
+                        当前产出表未在 ETL 任务库登记，无法打开任务开发。
+                      </p>
+                    ) : etlResolveState === 'error' ? (
+                      <p className="text-sm text-red-800 bg-red-50 border border-red-100 rounded-md px-3 py-2">
+                        解析 ETL 任务失败，请稍后重试。
+                      </p>
+                    ) : null}
                   </div>
                 )}
               </div>
             ) : (
-              <TaskOperationsTable dagId={dagId} taskNames={taskNames} />
+              <TaskOperationsTable
+                dagId={dagId}
+                taskNames={taskNames}
+                onTaskRowClick={handleSelectNodeFromOperations}
+              />
             )}
           </div>
         </div>

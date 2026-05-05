@@ -1,9 +1,18 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import tsconfigPaths from 'vite-tsconfig-paths'
 
-export default defineConfig({
+/** LangGraph 服务在 backend/langgraph；默认端口 8001。scripts/dev-services.sh 会注入 VITE_LANGGRAPH_PROXY_TARGET */
+function langgraphProxyTarget(mode: string): string {
+  const env = loadEnv(mode, process.cwd(), '')
+  const fromEnv =
+    (process.env.VITE_LANGGRAPH_PROXY_TARGET || env.VITE_LANGGRAPH_PROXY_TARGET || '').trim()
+  if (fromEnv) return fromEnv
+  return 'http://127.0.0.1:8001'
+}
+
+export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss(), tsconfigPaths()],
   server: {
     proxy: {
@@ -12,9 +21,9 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
-      // langgraph-template FastAPI：前缀 API_V1_STR（默认 /api/v1），见 app/main.py
+      // LangGraph FastAPI（仓库 backend/langgraph）；前端 llmApi 使用 /langgraph/api/v1；rewrite 去掉前缀
       '/langgraph': {
-        target: 'http://localhost:8001',
+        target: langgraphProxyTarget(mode),
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path.replace(/^\/langgraph/, ''),
@@ -27,4 +36,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

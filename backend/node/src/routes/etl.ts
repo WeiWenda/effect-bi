@@ -6,6 +6,7 @@ import { assertSingleSqlStatement, executeUserSql, trimRowsToPreview } from '../
 import { generateDagPythonForPublish } from '../services/etlDagPythonClient.js';
 import { buildAirflowOptionsForDag, normalizeRuntimeDepsForSave } from '../services/etlVersionPayload.js';
 import { defaultCatalogType, syncEtlPublishToNeo4j } from '../services/etlNeo4jPublish.js';
+import { defaultCatalog } from '../services/etlOutputTable.js';
 import { triggerBackfillForPublishedDag } from '../services/airflowRestBackfill.js';
 import { isAirflowRestConfigured, unpauseDagViaRestApi } from '../services/airflowRestUnpause.js';
 import adhocRouter from './adhoc.js';
@@ -254,6 +255,45 @@ router.use(adhocRouter);
 router.use(etlAirflowRouter);
 
 // --- Task development ---
+
+/**
+ * 按产出表三元组解析 ETL 逻辑任务名（etl_task_info），供链路治理跳转任务开发等场景。
+ * GET /api/etl/task-name-by-output-table?catalog=&database=&table=
+ */
+router.get('/task-name-by-output-table', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const database = typeof req.query.database === 'string' ? req.query.database.trim() : '';
+    const table = typeof req.query.table === 'string' ? req.query.table.trim() : '';
+    const catalogRaw = typeof req.query.catalog === 'string' ? req.query.catalog.trim() : '';
+    const dc = defaultCatalog();
+    const catalogNorm = catalogRaw || dc;
+
+    if (!database || !table) {
+      res.status(400).json({ error: 'database and table query params are required' });
+      return;
+    }
+
+    const result = await pool.query(
+      `SELECT i.name
+       FROM etl_task_info i
+       WHERE COALESCE(NULLIF(TRIM(i.catalog_name), ''), $1) = $2
+         AND i.database_name = $3
+         AND i.table_name = $4
+       LIMIT 1`,
+      [dc, catalogNorm, database, table]
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'No ETL task registered for this output table' });
+      return;
+    }
+
+    res.json({ name: result.rows[0].name as string });
+  } catch (error) {
+    console.error('task-name-by-output-table:', error);
+    res.status(500).json({ error: 'Failed to resolve task name' });
+  }
+});
 
 router.get('/tasks', async (_req: Request, res: Response): Promise<void> => {
   try {

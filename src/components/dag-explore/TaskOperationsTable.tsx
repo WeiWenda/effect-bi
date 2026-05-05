@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { taskAPI, TaskInstance } from '../../services/taskApi';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -6,6 +7,8 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 interface TaskOperationsTableProps {
   dagId: number;
   taskNames: Record<string, string>;
+  /** 点击任务行：与上方 DAG 节点 id（Neo4j elementId）对齐，仅联动选中图中节点 */
+  onTaskRowClick?: (nodeId: string) => void;
 }
 
 interface CellData {
@@ -39,7 +42,7 @@ interface TrendData {
   data: TrendDataPoint[];
 }
 
-export function TaskOperationsTable({ dagId, taskNames }: TaskOperationsTableProps) {
+export function TaskOperationsTable({ dagId, taskNames, onTaskRowClick }: TaskOperationsTableProps) {
   const [days, setDays] = useState(7);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Record<string, Record<string, CellData>>>({});
@@ -219,6 +222,16 @@ export function TaskOperationsTable({ dagId, taskNames }: TaskOperationsTablePro
             <option value={14}>14天</option>
             <option value={30}>30天</option>
           </select>
+          <button
+            type="button"
+            onClick={() => void loadTaskInstances()}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            title="重新获取任务执行状态与趋势图"
+          >
+            <RefreshCw className={`size-4 shrink-0 ${loading ? 'animate-spin' : ''}`} aria-hidden />
+            刷新
+          </button>
         </div>
         <div className="flex items-center gap-4 text-xs">
           <div className="flex items-center gap-2">
@@ -228,6 +241,10 @@ export function TaskOperationsTable({ dagId, taskNames }: TaskOperationsTablePro
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 bg-yellow-600 rounded" />
             <span className="text-gray-600">重试成功</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-sky-600 rounded" />
+            <span className="text-gray-600">运行中</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 bg-red-500 rounded" />
@@ -258,7 +275,11 @@ export function TaskOperationsTable({ dagId, taskNames }: TaskOperationsTablePro
             </thead>
             <tbody>
               {Object.keys(data).map(rowKey => (
-                <tr key={rowKey} className="border-b border-gray-100">
+                <tr
+                  key={rowKey}
+                  className={`border-b border-gray-100 ${onTaskRowClick ? 'cursor-pointer hover:bg-blue-50/50' : ''}`}
+                  onClick={() => onTaskRowClick?.(rowKey)}
+                >
                   <td className="px-4 py-3 text-sm text-gray-800 font-medium">
                     {getTaskName(rowKey)}
                   </td>

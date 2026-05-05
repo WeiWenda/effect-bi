@@ -1,4 +1,4 @@
-import axios, { AxiosResponse } from 'axios';
+import axios, { AxiosResponse, isAxiosError } from 'axios';
 
 const ETL_API_BASE_URL = 'http://127.0.0.1:3001/api/etl';
 
@@ -100,11 +100,11 @@ export interface EtlAirflowDeployment {
 /** PUT .../publish 成功响应：是否已通过 REST 取消暂停 DAG（开启调度） */
 export type EtlPublishAirflowUnpause = { skipped: true } | { ok: true };
 
-/** 发布后按调度开始日～当前时间发起的 Backfill（Airflow 3 /api/v2） */
+/** 发布后按调度开始日～当前时间发起的 Backfill（Airflow 3 /api/v2）；maxActiveRuns 为后端写入请求的并行 DAG Run 上限 */
 export type EtlPublishAirflowBackfill =
-  | { skipped: true; reason: string }
-  | { ok: true; backfillId: number }
-  | { ok: false; error: string };
+  | { skipped: true; reason: string; maxActiveRuns: number }
+  | { ok: true; backfillId: number; maxActiveRuns: number }
+  | { ok: false; error: string; maxActiveRuns: number };
 
 export const etlFolderAPI = {
   list: async (): Promise<EtlFolder[]> => {
@@ -192,6 +192,25 @@ export const etlAPI = {
   deleteAdhocSubmission: async (id: number): Promise<{ success: boolean }> => {
     const response = await axios.delete(`${ETL_API_BASE_URL}/adhoc/submissions/${id}`);
     return response.data;
+  },
+
+  /** 按产出表三元组解析 ETL 逻辑任务名；未登记时返回 null */
+  getTaskNameByOutputTable: async (
+    catalog: string,
+    database: string,
+    table: string,
+    opts?: { signal?: AbortSignal }
+  ): Promise<{ name: string } | null> => {
+    try {
+      const response = await axios.get<{ name: string }>(`${ETL_API_BASE_URL}/task-name-by-output-table`, {
+        params: { catalog, database, table },
+        signal: opts?.signal,
+      });
+      return response.data;
+    } catch (e) {
+      if (isAxiosError(e) && e.response?.status === 404) return null;
+      throw e;
+    }
   },
 
   listTasks: async (): Promise<{ tasks: EtlTaskListRow[] }> => {

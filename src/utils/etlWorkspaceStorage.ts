@@ -129,7 +129,7 @@ export function defaultTaskDevBody(): EtlTaskDevTabPersistedBody {
     cronExpression: '',
     scheduleStartDate: formatDateYMD(new Date()),
     retries: 1,
-    retryDelayMinutes: 5,
+    retryDelayMinutes: 1,
     alertRulesJson: '{"rules":[]}',
     qualityRulesJson: '{"sqlQueries":[],"rules":[]}',
     runtimeDepsJsonText: '{\n  "runtimeDependencies": []\n}',

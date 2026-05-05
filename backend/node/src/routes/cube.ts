@@ -144,24 +144,48 @@ router.post('/:name/copy', async (req: Request, res: Response): Promise<void> =>
  */
 router.delete('/:name', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name } = req.params;
+    const rawName = req.params.name;
+    const name = String(Array.isArray(rawName) ? rawName[0] : rawName ?? '').trim();
+    if (!name) {
+      res.status(400).json({ error: 'Cube name is required' });
+      return;
+    }
 
-    // Find published version ids before deleting (to clean up yml files)
+    const exists = await pool.query('SELECT 1 FROM cube_versions WHERE name = $1 LIMIT 1', [name]);
+    if (exists.rows.length === 0) {
+      res.status(404).json({ error: 'Cube not found' });
+      return;
+    }
+
+    /** charts.view_name 与查询页 Cube 名一致；dashboard_charts 表示已 Pin 到看板 */
+    const pinnedRef = await pool.query(
+      `SELECT DISTINCT d.id, d.name
+       FROM charts c
+       INNER JOIN dashboard_charts dc ON dc.chart_id = c.id
+       INNER JOIN dashboards d ON d.id = dc.dashboard_id
+       WHERE c.view_name = $1
+       ORDER BY d.name`,
+      [name]
+    );
+
+    if (pinnedRef.rows.length > 0) {
+      res.status(409).json({
+        error: '当前 cube 被以下看板所使用，请消除引用后再删除当前 cube',
+        dashboards: pinnedRef.rows.map(r => ({
+          id: r.id as number,
+          name: String(r.name ?? ''),
+        })),
+      });
+      return;
+    }
+
     const publishedResult = await pool.query(
       'SELECT id FROM cube_versions WHERE name = $1 AND is_published = true',
       [name]
     );
 
-    const result = await pool.query(
-      'DELETE FROM cube_versions WHERE name = $1 RETURNING id',
-      [name]
-    );
-    if (result.rows.length === 0) {
-      res.status(404).json({ error: 'Cube not found' });
-      return;
-    }
+    const result = await pool.query('DELETE FROM cube_versions WHERE name = $1 RETURNING id', [name]);
 
-    // Delete yml files for published versions
     if (CUBE_HOME) {
       for (const row of publishedResult.rows) {
         deleteYmlFiles(row.id);
