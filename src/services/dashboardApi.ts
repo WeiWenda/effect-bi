@@ -1,6 +1,6 @@
 import axios, { AxiosResponse } from 'axios';
 
-const DASHBOARD_API_BASE_URL = 'http://127.0.0.1:3001/api/dashboard';
+const DASHBOARD_API_BASE_URL = '/api/dashboard';
 
 import type { DashboardFolder, DashboardInfo, FilterConfig, DashboardLayoutItem, ChartConfig } from '../types/chart';
 import { normalizeDrilldownConfigForClient } from '../utils/drilldownConfig';

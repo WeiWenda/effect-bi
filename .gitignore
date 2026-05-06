@@ -26,3 +26,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# LangGraph submodule: local dev secrets (also listed in backend/langgraph/.gitignore)
+backend/langgraph/.env.development
+
+# Local secrets for docker-compose.stack.yaml
+docker/stack/.env
+
+# Trino Gravitino plugin jars (sync downloads tarball: bash docker/stack/trino/sync-plugin-from-dev.sh)
+docker/stack/trino/plugin/gravitino/

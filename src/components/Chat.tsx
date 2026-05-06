@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import { useLangGraphRuntime, LangGraphMessagesEvent, LangChainMessage } from '@assistant-ui/react-langgraph';
-import { Thread } from './assistant-ui/thread';
+import { Thread } from './assistant-ui/Thread';
 import { authAPI, chatAPI, Session, tokenStorage, threadListAdapter, LANGGRAPH_API_V1_BASE } from '../services/llmApi';
 import { useToast } from './ui/toast';
 import { ConfirmDialog } from './ui/confirm-dialog';

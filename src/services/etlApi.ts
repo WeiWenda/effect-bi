@@ -1,6 +1,6 @@
 import axios, { AxiosResponse, isAxiosError } from 'axios';
 
-const ETL_API_BASE_URL = 'http://127.0.0.1:3001/api/etl';
+const ETL_API_BASE_URL = '/api/etl';
 
 export interface AdhocSession {
   id: number;

@@ -1,6 +1,6 @@
 import axios, { AxiosResponse } from 'axios';
 
-const FILE_API_BASE_URL = 'http://127.0.0.1:3001/api/file';
+const FILE_API_BASE_URL = '/api/file';
 
 export interface GetTaskFileResponse {
   content: string;

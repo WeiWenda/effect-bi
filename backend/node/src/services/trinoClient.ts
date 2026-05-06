@@ -27,13 +27,13 @@ export function isTrinoConfigured(): boolean {
 }
 
 function trinoHeaders(): Record<string, string> {
-  const user = process.env.TRINO_USER || 'etl-chatbot';
+  const user = process.env.TRINO_USER || 'etl-effect-bi';
   const catalog = process.env.TRINO_CATALOG || 'hive';
   const schema = process.env.TRINO_SCHEMA || '';
   const h: Record<string, string> = {
     'X-Trino-User': user,
     'X-Trino-Catalog': catalog,
-    'X-Trino-Source': 'chatbot-backend',
+    'X-Trino-Source': 'effect-bi-backend',
     Accept: 'application/json',
   };
   if (schema) {
@@ -110,7 +110,8 @@ export async function executeTrinoQuery(sql: string): Promise<{
 
     const state = json.stats?.state;
     if (state === 'FAILED') {
-      throw new Error(json.error?.message || 'Trino query failed');
+      const fail = json as TrinoStatementResponse & { error?: { message?: string } };
+      throw new Error(fail.error?.message || 'Trino query failed');
     }
     if (state === 'FINISHED' || state === 'CANCELED') {
       break;

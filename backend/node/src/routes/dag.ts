@@ -13,9 +13,9 @@ interface DagView {
   id: number;
   name: string;
   description: string | null;
-  node_ids: string[];
-  created_at: Date;
-  updated_at: Date;
+  nodeIds: string[];
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 /**
@@ -99,9 +99,10 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
  */
 router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const rawId = req.params.id;
+    const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
-    if (!id || isNaN(parseInt(id))) {
+    if (!id || isNaN(parseInt(id, 10))) {
       res.status(400).json({ error: 'Valid DAG view ID is required' });
       return;
     }

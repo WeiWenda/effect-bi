@@ -1,6 +1,6 @@
 import axios, { AxiosResponse } from 'axios';
 
-const CUBE_PROXY_BASE_URL = 'http://127.0.0.1:3001/api/cube-proxy';
+const CUBE_PROXY_BASE_URL = '/api/cube-proxy';
 
 import type { CubeLoadResponse, CubeQuery, CubeSqlResponse } from '../types/chart';
 

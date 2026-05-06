@@ -1,0 +1,273 @@
+# Full local stack: effect-bi (Node+Vite static), LangGraph API, Cube, Gravitino, Neo4j,
+# pgvector (Postgres), Trino, and Apache Airflow 3 (Celery + Redis + Postgres) — one Compose project.
+#
+# Prereq: Docker Compose v2.20+ (`docker compose` with `include` support).
+#
+# Setup:
+#   cp docker/stack/env.example docker/stack/.env
+#   # set FERNET_KEY (see env.example), OPENAI_API_KEY, JWT_SECRET_KEY, etc.
+#   docker compose --env-file docker/stack/.env -f docker-compose.stack.yaml build
+#   docker compose --env-file docker/stack/.env -f docker-compose.stack.yaml up -d
+#
+# Pass --env-file docker/stack/.env so ${OPENAI_API_KEY:?…} etc. resolve when parsing YAML;
+# service env_file alone injects the container but does not substitute compose variables.
+#
+# URLs (defaults): UI http://localhost:3001  LangGraph http://localhost:8001
+#   Airflow http://localhost:8080  Trino http://localhost:8088  Cube http://localhost:4000
+#   Gravitino UI http://localhost:8090  Neo4j Browser http://localhost:7474
+#   pgvector on localhost:5434  Airflow Postgres localhost:5433
+#
+# Airflow DAG/config/logs/plugins bind to ./docker/stack/airflow-bind by default, or set AIRFLOW_PROJ_DIR.
+# Trino: catalogs + Gravitino plugin under ./docker/stack/trino (override TRINO_HOST_DIR). Sync plugin: docker/stack/trino/sync-plugin-from-dev.sh
+# Cube: host dir ./docker/stack/cube-home → effect-bi CUBE_HOME (/cube-home) and Cube project root (/cube/conf); override CUBE_HOST_DIR.
+# Gravitino: `gravitino-init` creates metalake `effectbi` + JDBC catalog `localpg` → pgvector DB `lineage` (override METALAKE_NAME / PG_CATALOG_NAME).
+# ETL/Cube demo: `effect-bi-init` uses the same image as `pgvector` (PGVECTOR_IMAGE) — only `psql`, no extra client image.
+
+name: effect-bi-stack
+
+services:
+  pgvector:
+    image: ${PGVECTOR_IMAGE:-pgvector/pgvector:pg16}
+    environment:
+      POSTGRES_USER: stack
+      POSTGRES_PASSWORD: ${STACK_POSTGRES_PASSWORD:-stacksecret}
+      POSTGRES_DB: postgres
+    volumes:
+      - pgvector-data:/var/lib/postgresql/data
+      - ./docker/stack/pg-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${PGVECTOR_PUBLISH_PORT:-5434}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stack -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-stacksecret}
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - neo4j-data:/data
+    restart: unless-stopped
+
+  gravitino:
+    image: ${GRAVITINO_IMAGE:-apache/gravitino:1.2.0}
+    ports:
+      - "${GRAVITINO_UI_PORT:-8090}:8090"
+      - "${GRAVITINO_REST_PORT:-9001}:9001"
+    restart: unless-stopped
+
+  # Creates metalake + JDBC catalog once Gravitino REST + Postgres are up (409 if already exists).
+  gravitino-init:
+    # alpine + apk curl avoids curlimages/curl pull failures from Docker Hub; override ALPINE_IMAGE if needed (mirror).
+    image: ${ALPINE_IMAGE:-alpine:3.20}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - apk add --no-cache curl && exec /bin/sh /init-metalake.sh
+    depends_on:
+      gravitino:
+        condition: service_started
+      pgvector:
+        condition: service_healthy
+    environment:
+      # Catalog REST + UI (same as trino gravitino.properties gravitino.uri); 9001 is Iceberg REST only.
+      GRAVITINO_API_BASE: http://gravitino:8090/api
+      METALAKE_NAME: ${GRAVITINO_METALAKE:-effectbi}
+      PG_CATALOG_NAME: ${GRAVITINO_PG_CATALOG:-localpg}
+      PG_HOST: pgvector
+      PG_PORT: "5432"
+      PG_DATABASE: lineage
+      PG_USER: stack
+      PG_PASSWORD: ${STACK_POSTGRES_PASSWORD:-stacksecret}
+    volumes:
+      - ./docker/stack/gravitino/init-metalake.sh:/init-metalake.sh:ro
+    restart: "no"
+
+  cube:
+    image: ${CUBE_IMAGE:-cubejs/cube:latest}
+    ports:
+      - "${CUBE_PUBLISH_PORT:-4000}:4000"
+    environment:
+      CUBEJS_DEV_MODE: "true"
+      CUBEJS_DB_TYPE: postgres
+      CUBEJS_DB_HOST: pgvector
+      CUBEJS_DB_PORT: "5432"
+      CUBEJS_DB_NAME: lineage
+      CUBEJS_DB_USER: stack
+      CUBEJS_DB_PASS: ${STACK_POSTGRES_PASSWORD:-stacksecret}
+      CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:-devcubeapisecret}
+      CUBEJS_SCHEMA_PATH: model
+    volumes:
+      - ${CUBE_HOST_DIR:-./docker/stack/cube-home}:/cube/conf
+    depends_on:
+      pgvector:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Catalog + Gravitino plugin mounted from ./docker/stack/trino (override with TRINO_HOST_DIR).
+  trino:
+    image: ${TRINO_IMAGE:-trinodb/trino:478}
+    hostname: trino
+    ports:
+      - "${TRINO_PUBLISH_PORT:-8088}:8080"
+    environment:
+      TRINO_ENVIRONMENT: ${TRINO_ENVIRONMENT:-docker-stack}
+      # Gravitino / dynamic catalogs (same as docker run -e CATALOG_MANAGEMENT=dynamic)
+      CATALOG_MANAGEMENT: ${CATALOG_MANAGEMENT:-dynamic}
+    volumes:
+      - ${TRINO_HOST_DIR:-./docker/stack/trino}/etc/catalog/gravitino.properties:/etc/trino/catalog/gravitino.properties:ro
+      - ${TRINO_HOST_DIR:-./docker/stack/trino}/plugin/gravitino:/usr/lib/trino/plugin/gravitino:ro
+    depends_on:
+      pgvector:
+        condition: service_healthy
+      gravitino:
+        condition: service_started
+      gravitino-init:
+        condition: service_completed_successfully
+    healthcheck:
+      # Matches upstream Trino image when present; else falls back to REST probe.
+      test:
+        [
+          "CMD-SHELL",
+          "if [ -x /usr/lib/trino/bin/health-check ]; then /usr/lib/trino/bin/health-check; else curl -fsS http://127.0.0.1:8080/v1/info >/dev/null; fi",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 120s
+    restart: unless-stopped
+
+  langgraph:
+    build:
+      context: ./backend/langgraph
+      dockerfile: Dockerfile
+      args:
+        APP_ENV: ${LANGGRAPH_APP_ENV:-production}
+        APT_MIRROR_HOST: ${APT_MIRROR_HOST:-}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.13-slim-bookworm}
+    ports:
+      - "${LANGGRAPH_PUBLISH_PORT:-8001}:8001"
+    env_file:
+      - path: ./docker/stack/.env
+        required: false
+    environment:
+      APP_ENV: production
+      POSTGRES_HOST: pgvector
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: langgraph
+      POSTGRES_USER: stack
+      POSTGRES_PASSWORD: ${STACK_POSTGRES_PASSWORD:-stacksecret}
+      ALLOWED_ORIGINS: ${LANGGRAPH_ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
+      LANGFUSE_TRACING_ENABLED: ${LANGFUSE_TRACING_ENABLED:-false}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY in docker/stack/.env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in docker/stack/.env}
+    depends_on:
+      pgvector:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 90s
+    restart: unless-stopped
+
+  effect-bi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-bookworm-slim}
+        # Vite bakes VITE_* into static JS at image build — set in docker/stack/.env e.g. VITE_GRAVITINO_METALAKE=my_lake
+        VITE_GRAVITINO_METALAKE: ${VITE_GRAVITINO_METALAKE:-effectbi}
+    ports:
+      - "${EFFECT_BI_PUBLISH_PORT:-3001}:3001"
+    env_file:
+      - path: ./docker/stack/.env
+        required: false
+    environment:
+      PORT: "3001"
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-stacksecret}
+      NEO4J_DATABASE: neo4j
+      PG_HOST: pgvector
+      PG_PORT: "5432"
+      PG_USER: stack
+      PG_PASSWORD: ${STACK_POSTGRES_PASSWORD:-stacksecret}
+      PG_DATABASE: lineage
+      LANGGRAPH_ORIGIN: http://langgraph:8001
+      GRAVITINO_ORIGIN: http://gravitino:8090
+      CUBE_SERVER_URL: http://cube:4000
+      CUBE_API_TOKEN: ${CUBEJS_API_SECRET:-}
+      CUBE_HOME: /cube/conf/model
+      AIRFLOW_REST_BASE_URL: http://airflow-apiserver:8080
+      AIRFLOW_REST_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      AIRFLOW_REST_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      AIRFLOW_REST_API_VERSION: ${AIRFLOW_REST_API_VERSION:-v2}
+      ETL_AIRFLOW_DAGS_DIR: /opt/airflow/dags
+      TRINO_URL: http://trino:8080
+      TRINO_USER: ${TRINO_USER:-etl-effect-bi}
+      TRINO_CATALOG: ${TRINO_CATALOG:-gravitino}
+      TRINO_SCHEMA: ${TRINO_SCHEMA:-}
+      TRINO_MAX_ROWS: ${TRINO_MAX_ROWS:-500}
+      TRINO_CLIENT_TIMEOUT_MS: ${TRINO_CLIENT_TIMEOUT_MS:-120000}
+    volumes:
+      - ${CUBE_HOST_DIR:-./docker/stack/cube-home}:/cube/conf
+      - ${AIRFLOW_PROJ_DIR:-./docker/stack/airflow-bind}/dags:/opt/airflow/dags
+    depends_on:
+      neo4j:
+        condition: service_started
+      pgvector:
+        condition: service_healthy
+      langgraph:
+        condition: service_healthy
+      cube:
+        condition: service_started
+      gravitino-init:
+        condition: service_completed_successfully
+      trino:
+        condition: service_healthy
+      airflow-apiserver:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    restart: unless-stopped
+
+  effect-bi-init:
+    image: ${PGVECTOR_IMAGE:-pgvector/pgvector:pg16}
+    depends_on:
+      effect-bi:
+        condition: service_healthy
+    environment:
+      PGHOST: pgvector
+      PGPORT: "5432"
+      PGUSER: stack
+      PGPASSWORD: ${STACK_POSTGRES_PASSWORD:-stacksecret}
+      PGDATABASE: lineage
+      EFFECT_BI_DEMO_SQL_FILE: /insert-demo-data.sql
+    volumes:
+      - ./docker/stack/pg-init/insert-demo-data.sql:/insert-demo-data.sql:ro
+      - ./docker/stack/pg-init/run-effect-bi-demo-data.sh:/run-effect-bi-demo-data.sh:ro
+    entrypoint: ["/bin/sh", "/run-effect-bi-demo-data.sh"]
+    restart: "no"
+
+volumes:
+  pgvector-data:
+  neo4j-data:
+
+include:
+  - path: docker/compose/airflow-services.yaml

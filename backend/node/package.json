@@ -17,9 +17,11 @@
   "description": "Neo4j lineage backend service",
   "dependencies": {
     "@types/pg": "^8.20.0",
+    "axios": "^1.15.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "http-proxy-middleware": "^3.0.5",
     "neo4j-driver": "^6.0.1",
     "pg": "^8.20.0"
   },

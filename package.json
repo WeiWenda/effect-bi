@@ -16,7 +16,7 @@
   "dependencies": {
     "@ai-sdk/openai": "^3.0.53",
     "@assistant-ui/react": "^0.12.25",
-    "@assistant-ui/react-langgraph": "file:/Users/weiwenda/workspace/GitWorkSpace/assistant-ui/packages/react-langgraph",
+    "@assistant-ui/react-langgraph": "^0.13.12",
     "@assistant-ui/react-markdown": "^0.12.9",
     "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/typography": "^0.5.19",

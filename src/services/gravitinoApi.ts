@@ -1,7 +1,7 @@
 import axios, { AxiosResponse } from 'axios';
 
 const GRAVITINO_API_BASE_URL = '/gravitino/api/metalakes';
-const GRAVITINO_METALAKE = import.meta.env.VITE_GRAVITINO_METALAKE || 'test';
+const GRAVITINO_METALAKE = import.meta.env.VITE_GRAVITINO_METALAKE || 'effectbi';
 
 export interface NameIdentifier {
   namespace: string[];

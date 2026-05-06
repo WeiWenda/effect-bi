@@ -1,13 +1,32 @@
 /**
- * Creates 20 demo tables under PostgreSQL schema `demo` for local testing
+ * Creates PostgreSQL schema `demo` and 20 demo tables for local testing
  * (运行依赖 / 产出表 等选择器的占位数据).
  *
- * Run from backend/:  npx tsx scripts/mock-table.ts
+ * Env: `backend/node/.env` (PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD).
+ * Tables are created under schema **`demo`** (not `public`). List with:
+ *   psql: `\dn demo` then `\dt demo.*`
+ *   SQL: `SELECT tablename FROM pg_tables WHERE schemaname = 'demo';`
+ * Docker pgvector default from host: PG_HOST=127.0.0.1 PG_PORT=5434 PG_DATABASE=lineage PG_USER=stack
+ *
+ * Run: `cd backend/node && npm run mock-table`
  */
-import { pool } from '../src/config/postgres.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import type { PoolClient } from 'pg';
 
-dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(__dirname, '../.env') });
+
+const { pool } = await import('../src/config/postgres.js');
+
+/** Safe for use as unquoted PostgreSQL role identifier in GRANT … TO … */
+function pgRoleIdent(raw: string): string {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_$]*$/.test(raw)) {
+    throw new Error(`PG_USER is not a safe SQL identifier: ${JSON.stringify(raw)}`);
+  }
+  return raw;
+}
 
 const DDL: string[] = [
   `CREATE TABLE IF NOT EXISTS demo.dim_customer (
@@ -205,14 +224,55 @@ const DDL: string[] = [
   )`,
 ];
 
+async function grantDemoPrivileges(client: PoolClient): Promise<void> {
+  const role = pgRoleIdent(process.env.PG_USER || 'postgres');
+  await client.query(`GRANT USAGE ON SCHEMA demo TO ${role}`);
+  await client.query(`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA demo TO ${role}`);
+  await client.query(`GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA demo TO ${role}`);
+  await client.query(
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA demo GRANT ALL ON TABLES TO ${role}`,
+  );
+  await client.query(
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA demo GRANT ALL ON SEQUENCES TO ${role}`,
+  );
+}
+
+function connectionSummary(): string {
+  const host = process.env.PG_HOST || 'localhost';
+  const port = process.env.PG_PORT || '5432';
+  const database = process.env.PG_DATABASE || 'lineage';
+  const user = process.env.PG_USER || 'postgres';
+  return `${user}@${host}:${port}/${database}`;
+}
+
 async function main(): Promise<void> {
+  console.log(`Connecting as ${connectionSummary()} — confirm this matches where you inspect tables.\n`);
+
   const client = await pool.connect();
   try {
+    console.log('Creating schema demo (if not exists)…');
     await client.query('CREATE SCHEMA IF NOT EXISTS demo');
+    console.log(`Creating ${DDL.length} demo tables under demo.* …`);
     for (const sql of DDL) {
       await client.query(sql);
     }
-    console.log(`demo schema: ensured ${DDL.length} tables exist (CREATE IF NOT EXISTS).`);
+    await grantDemoPrivileges(client);
+
+    const verify = await client.query<{ tablename: string }>(
+      `SELECT tablename FROM pg_tables WHERE schemaname = 'demo' ORDER BY tablename`,
+    );
+    console.log('');
+    console.log(`Verified in database: ${verify.rows.length} tables in schema "demo":`);
+    for (const row of verify.rows) {
+      console.log(`  demo.${row.tablename}`);
+    }
+    if (verify.rows.length === 0) {
+      console.warn('Warning: no tables listed in pg_tables for schema demo — check permissions or wrong database.');
+    }
+    console.log('');
+    console.log(
+      `Done. GRANT applied to role ${process.env.PG_USER || 'postgres'}. If your UI shows only "public", expand schema **demo**.`,
+    );
   } finally {
     client.release();
     await pool.end();
