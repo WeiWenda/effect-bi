@@ -12,7 +12,7 @@ import {
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import { useLangGraphRuntime, LangGraphMessagesEvent, LangChainMessage } from '@assistant-ui/react-langgraph';
 import { Thread } from './assistant-ui/thread';
-import { authAPI, chatAPI, Session, tokenStorage, threadListAdapter } from '../services/llmApi';
+import { authAPI, chatAPI, Session, tokenStorage, threadListAdapter, LANGGRAPH_API_V1_BASE } from '../services/llmApi';
 import { useToast } from './ui/toast';
 import { ConfirmDialog } from './ui/confirm-dialog';
 
@@ -143,7 +143,7 @@ function ChatContent(): React.JSX.Element {
     userMessage: string,
   ): Promise<void> => {
     try {
-      const response = await fetch('/api/v1/chatbot/chat/stream', {
+      const response = await fetch(`${LANGGRAPH_API_V1_BASE}/chatbot/chat/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -221,7 +221,7 @@ function ChatContent(): React.JSX.Element {
           content: msg.content,
         }));
 
-        const response = await fetch('/api/v1/chatbot/chat/stream', {
+        const response = await fetch(`${LANGGRAPH_API_V1_BASE}/chatbot/chat/stream`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

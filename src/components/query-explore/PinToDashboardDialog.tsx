@@ -11,6 +11,12 @@ interface PinToDashboardDialogProps {
   onClose: () => void;
   onPin: (dashboardId: number, chartName: string) => void;
   chartName: string;
+  /** 为 true 时不展示图表名称输入；确认 Pin 时使用 initialChartName 去空白，空则用「文本」 */
+  hideChartNameInput?: boolean;
+  /** 非空时锁定为该看板，不可改选（用于从看板编辑后「更新看板图表」） */
+  lockedDashboardId?: number | null;
+  dialogTitle?: string;
+  confirmButtonLabel?: string;
 }
 
 interface FolderNode extends DashboardFolder {
@@ -45,7 +51,16 @@ function buildFolderTree(folders: DashboardFolder[]): FolderNode[] {
   return sortNodes(roots);
 }
 
-export function PinToDashboardDialog({ open, onClose, onPin, chartName: initialChartName }: PinToDashboardDialogProps): React.JSX.Element {
+export function PinToDashboardDialog({
+  open,
+  onClose,
+  onPin,
+  chartName: initialChartName,
+  hideChartNameInput = false,
+  lockedDashboardId = null,
+  dialogTitle = 'Pin 到看板',
+  confirmButtonLabel = '确认 Pin',
+}: PinToDashboardDialogProps): React.JSX.Element {
   const [localChartName, setLocalChartName] = useState(initialChartName);
   const [folders, setFolders] = useState<DashboardFolder[]>([]);
   const [dashboards, setDashboards] = useState<DashboardInfo[]>([]);
@@ -69,15 +84,17 @@ export function PinToDashboardDialog({ open, onClose, onPin, chartName: initialC
     }
   }, []);
 
+  const selectionLocked = lockedDashboardId != null;
+
   useEffect(() => {
     if (open) {
       setSearchText('');
       setExpandedFolders(new Set());
-      setSelectedDashboardId(null);
+      setSelectedDashboardId(lockedDashboardId ?? null);
       setLocalChartName(initialChartName);
       loadData();
     }
-  }, [open, loadData]);
+  }, [open, loadData, lockedDashboardId, initialChartName]);
 
   const tree = useMemo(() => buildFolderTree(folders), [folders]);
 
@@ -127,6 +144,12 @@ export function PinToDashboardDialog({ open, onClose, onPin, chartName: initialC
       return changed ? next : prev;
     });
   };
+
+  useEffect(() => {
+    if (!open || lockedDashboardId == null || dashboards.length === 0) return;
+    const dash = dashboards.find(d => d.id === lockedDashboardId);
+    if (dash) expandAncestors(dash.folder_id);
+  }, [open, lockedDashboardId, dashboards]);
 
   const handleCreated = (_dash: DashboardInfo) => {
     setCreateDialogOpen(false);
@@ -206,8 +229,12 @@ export function PinToDashboardDialog({ open, onClose, onPin, chartName: initialC
     return (
       <button
         key={dash.id}
-        onClick={() => setSelectedDashboardId(dash.id)}
-        className={`flex items-center gap-2 w-full px-2 py-1.5 transition-colors text-left rounded-md ${isSelected ? 'bg-blue-50 border-l-2 border-blue-500' : 'hover:bg-gray-50'}`}
+        type="button"
+        disabled={selectionLocked}
+        onClick={() => {
+          if (!selectionLocked) setSelectedDashboardId(dash.id);
+        }}
+        className={`flex items-center gap-2 w-full px-2 py-1.5 transition-colors text-left rounded-md ${isSelected ? 'bg-blue-50 border-l-2 border-blue-500' : 'hover:bg-gray-50'} ${selectionLocked ? 'opacity-60 cursor-not-allowed' : ''}`}
         style={{ paddingLeft: `${depth * 16 + 22}px` }}
       >
         <LayoutDashboardIcon className={`size-4 shrink-0 ${isSelected ? 'text-blue-600' : 'text-gray-400'}`} />
@@ -225,66 +252,91 @@ export function PinToDashboardDialog({ open, onClose, onPin, chartName: initialC
       <Dialog open={open} onOpenChange={onClose}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Pin 到看板</DialogTitle>
+            <DialogTitle>{dialogTitle}</DialogTitle>
           </DialogHeader>
           <div className="py-2">
-            {/* Chart name */}
-            <div className="mb-3">
-              <label className="block text-xs font-medium text-gray-500 mb-1">图表名称</label>
-              <input
-                type="text"
-                value={localChartName}
-                onChange={e => setLocalChartName(e.target.value)}
-                className="w-full text-sm border border-gray-200 rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                placeholder="请输入图表名称"
-              />
-            </div>
-            {/* Target dashboard selection */}
-            <div className="mb-3">
-              <label className="block text-xs font-medium text-gray-500 mb-1">选择目标看板</label>
-              {/* Search input with dropdown suggestions */}
-              <div className="relative flex gap-2">
-              <div className="relative flex-1">
-                <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-gray-400" />
+            {!hideChartNameInput && (
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">图表名称</label>
                 <input
                   type="text"
-                  value={searchText}
-                  onChange={e => setSearchText(e.target.value)}
-                  onClick={() => setSearchFocused(true)}
-                  onBlur={() => setTimeout(() => setSearchFocused(false), 150)}
-                  placeholder="搜索看板..."
-                  className="w-full text-sm border border-gray-200 rounded-md pl-8 pr-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  value={localChartName}
+                  onChange={e => setLocalChartName(e.target.value)}
+                  className="w-full text-sm border border-gray-200 rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  placeholder="请输入图表名称"
                 />
               </div>
-              <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)}>
-                <PlusIcon className="size-4" />
-              </Button>
-              {/* Dropdown suggestions */}
-              {searchFocused && filteredDashboards.length > 0 && (
-                <div className="absolute z-50 left-0 top-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-48 overflow-auto" style={{ width: 'calc(100% - 2.25rem)' }}>
-                  {filteredDashboards.map(dash => {
-                    const folderPath = getFolderPath(dash.folder_id);
-                    return (
-                      <button
-                        key={dash.id}
-                        onMouseDown={() => { setSelectedDashboardId(dash.id); setSearchFocused(false); expandAncestors(dash.folder_id); }}
-                        className={`flex items-center gap-2 w-full px-3 py-2 text-left transition-colors ${selectedDashboardId === dash.id ? 'bg-blue-50 border-l-2 border-blue-500' : 'hover:bg-gray-50'}`}
-                      >
-                        <LayoutDashboardIcon className={`size-4 shrink-0 ${selectedDashboardId === dash.id ? 'text-blue-600' : 'text-gray-400'}`} />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm text-gray-700 truncate">{dash.name}</div>
-                          {folderPath && <div className="text-xs text-gray-400 truncate">{folderPath}</div>}
-                        </div>
-                        <span className="text-xs text-gray-400 shrink-0">{dash.chart_count || 0} 图表</span>
-                      </button>
-                    );
-                  })}
+            )}
+            {/* Target dashboard selection */}
+            {selectionLocked ? (
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">目标看板</label>
+                <div className="text-sm text-gray-800 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                  {loading ? (
+                    <span className="text-gray-400">加载中…</span>
+                  ) : (
+                    dashboards.find(d => d.id === lockedDashboardId)?.name ?? `看板 #${lockedDashboardId}`
+                  )}
                 </div>
-              )}
+                <p className="text-xs text-gray-400 mt-1.5">从当前看板进入编辑，更新将写回该看板中的此图表</p>
               </div>
-            </div>
+            ) : (
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">选择目标看板</label>
+                {/* Search input with dropdown suggestions */}
+                <div className="relative flex gap-2">
+                  <div className="relative flex-1">
+                    <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-gray-400" />
+                    <input
+                      type="text"
+                      value={searchText}
+                      onChange={e => setSearchText(e.target.value)}
+                      onClick={() => setSearchFocused(true)}
+                      onBlur={() => setTimeout(() => setSearchFocused(false), 150)}
+                      placeholder="搜索看板..."
+                      className="w-full text-sm border border-gray-200 rounded-md pl-8 pr-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)}>
+                    <PlusIcon className="size-4" />
+                  </Button>
+                  {/* Dropdown suggestions */}
+                  {searchFocused && filteredDashboards.length > 0 && (
+                    <div
+                      className="absolute z-50 left-0 top-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-48 overflow-auto"
+                      style={{ width: 'calc(100% - 2.25rem)' }}
+                    >
+                      {filteredDashboards.map(dash => {
+                        const folderPath = getFolderPath(dash.folder_id);
+                        return (
+                          <button
+                            key={dash.id}
+                            type="button"
+                            onMouseDown={() => {
+                              setSelectedDashboardId(dash.id);
+                              setSearchFocused(false);
+                              expandAncestors(dash.folder_id);
+                            }}
+                            className={`flex items-center gap-2 w-full px-3 py-2 text-left transition-colors ${selectedDashboardId === dash.id ? 'bg-blue-50 border-l-2 border-blue-500' : 'hover:bg-gray-50'}`}
+                          >
+                            <LayoutDashboardIcon
+                              className={`size-4 shrink-0 ${selectedDashboardId === dash.id ? 'text-blue-600' : 'text-gray-400'}`}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm text-gray-700 truncate">{dash.name}</div>
+                              {folderPath && <div className="text-xs text-gray-400 truncate">{folderPath}</div>}
+                            </div>
+                            <span className="text-xs text-gray-400 shrink-0">{dash.chart_count || 0} 图表</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
-            {loading ? (
+            {selectionLocked ? null : loading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2Icon className="size-5 animate-spin text-gray-400" />
               </div>
@@ -304,8 +356,18 @@ export function PinToDashboardDialog({ open, onClose, onPin, chartName: initialC
             )}
           </div>
           <DialogFooter>
-            <Button onClick={() => selectedDashboardId && onPin(selectedDashboardId, localChartName)} disabled={!selectedDashboardId || !localChartName.trim()} className="w-full">
-              确认 Pin
+            <Button
+              onClick={() => {
+                if (!selectedDashboardId) return;
+                const name = hideChartNameInput
+                  ? initialChartName.trim() || '文本'
+                  : localChartName.trim();
+                onPin(selectedDashboardId, name);
+              }}
+              disabled={!selectedDashboardId || (!hideChartNameInput && !localChartName.trim())}
+              className="w-full"
+            >
+              {confirmButtonLabel}
             </Button>
           </DialogFooter>
         </DialogContent>

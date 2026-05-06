@@ -6,6 +6,11 @@ import { MemberFieldTypeIcon } from '../filter/MemberFieldTypeIcon';
 import { Button } from '@/components/ui/button';
 import type { FilterConfig, FilterOperator } from '../../types/chart';
 import {
+  formatTimeBoundDisplay,
+  isTimeRangeSpecComplete,
+  migrateLegacyToTimeRange,
+} from '../../utils/filterTimeRelative';
+import {
   getOperatorLabel,
   getOperatorsForType,
   isNoValueOperator,
@@ -21,10 +26,25 @@ export interface StaticFilterConfigZoneProps {
   cubeViewName?: string | null;
 }
 
+/** 时间列日期范围：仅「起 ~ 止」，不拼「在范围内」等操作符；支持仅 timeRange、values 为空 */
+function formatTimeRangeListSummary(filter: FilterConfig): string | null {
+  if (!isTimeType(filter.type || '') || !isRangeOperator(filter.operator)) return null;
+  if (filter.values.length === 2) {
+    return `${filter.values[0]} ~ ${filter.values[1]}`;
+  }
+  const spec = migrateLegacyToTimeRange(filter);
+  if (spec && isTimeRangeSpecComplete(spec)) {
+    return `${formatTimeBoundDisplay(spec.start)} ~ ${formatTimeBoundDisplay(spec.end)}`;
+  }
+  return null;
+}
+
 function formatFilterText(filter: FilterConfig): string {
   const fieldTitle = filter.shortTitle || filter.title || filter.field;
   const opLabel = getOperatorLabel(filter.operator);
   if (isNoValueOperator(filter.operator)) return `${fieldTitle} ${opLabel}`;
+  const timeSummary = formatTimeRangeListSummary(filter);
+  if (timeSummary != null) return `${fieldTitle} ${timeSummary}`;
   if (isRangeOperator(filter.operator) && filter.values.length === 2) {
     return `${fieldTitle} ${opLabel} ${filter.values[0]} ~ ${filter.values[1]}`;
   }

@@ -138,3 +138,11 @@
 :focus-visible {
   box-shadow: none;
 }
+
+/* react-grid-layout 拖拽落点占位（库默认为大红半透明，此处统一为半透明橙） */
+.react-grid-item.react-grid-placeholder {
+  background: rgb(249 115 22 / 22%) !important;
+  border: 2px dashed rgb(249 115 22 / 45%);
+  border-radius: 0.5rem;
+  opacity: 1 !important;
+}

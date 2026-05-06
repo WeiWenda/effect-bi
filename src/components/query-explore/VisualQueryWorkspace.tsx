@@ -16,18 +16,22 @@ import { chartAPI } from '../../services/chartApi';
 import { dashboardAPI } from '../../services/dashboardApi';
 import { useToast } from '../ui/toast';
 import { normalizeDrilldownConfigForClient } from '../../utils/drilldownConfig';
-import type {
-  ChartType,
-  ChartConfig,
-  DimensionConfig,
-  MetricConfig,
-  FilterConfig,
-  SortConfig,
-  CubeMeta,
-  CubeQuery,
-  DynamicFilterConfig,
-  DynamicDrilldownConfig,
-  RtfTextChartConfig,
+import {
+  type ChartType,
+  type ChartConfig,
+  type DimensionConfig,
+  type MetricConfig,
+  type FilterConfig,
+  type SortConfig,
+  type CubeMeta,
+  type CubeQuery,
+  type DynamicFilterConfig,
+  type DynamicDrilldownConfig,
+  type RtfTextChartConfig,
+  normalizeChartTypeForVisualQuery,
+  isVisualQueryChartTypeDisabled,
+  chartTypeUsesNoDimensions,
+  chartTypeMaxMetrics,
 } from '../../types/chart';
 import { RtfTextChartConfigSection } from './RtfTextChartConfigSection';
 import {
@@ -37,6 +41,7 @@ import {
   assignChartToTabInGroup,
 } from '../../utils/dashboardTabOnlyLayout';
 import { expandFiltersForQuery } from '../../utils/filterTimeRelative';
+import { normalizeRtfTextChartConfig } from '../../utils/rtfTextInterpolation';
 
 function buildCubeQuery(
   _chartType: ChartType,
@@ -110,15 +115,6 @@ function buildCubeQuery(
 
 const QUERY_STORAGE_KEY = 'visualQueryDraft';
 
-function defaultRtfTextChartConfig(): RtfTextChartConfig {
-  return {
-    interpolationExpression: '',
-    fontSizePx: 16,
-    color: '#111827',
-    fontFamily: 'system-ui, "Microsoft YaHei", "PingFang SC", sans-serif',
-  };
-}
-
 interface QueryDraft {
   selectedView: string | null;
   chartType: ChartType;
@@ -180,26 +176,41 @@ export function VisualQueryWorkspace({
     variant === 'page' && searchParams.get('chartId')
       ? parseInt(searchParams.get('chartId')!, 10)
       : null;
+  const sourceDashboardId =
+    variant === 'page' && searchParams.get('dashboardId')
+      ? parseInt(searchParams.get('dashboardId')!, 10)
+      : null;
+  const canUpdateSourceDashboardChart =
+    Boolean(editingChartId) && sourceDashboardId != null && !Number.isNaN(sourceDashboardId);
   const cubeNameParam = variant === 'page' ? searchParams.get('cubeName') : null;
 
   const draft = variant === 'page' ? loadDraft() : null;
   const [selectedView, setSelectedView] = useState<string | null>(draft?.selectedView ?? null);
   const [selectedCube, setSelectedCube] = useState<CubeMeta | null>(null);
-  const [chartType, setChartType] = useState<ChartType>(draft?.chartType ?? 'table');
-  const [dimensions, setDimensions] = useState<DimensionConfig[]>(draft?.dimensions ?? []);
+  const [chartType, setChartType] = useState<ChartType>(() =>
+    normalizeChartTypeForVisualQuery(draft?.chartType ?? 'table')
+  );
+  const [dimensions, setDimensions] = useState<DimensionConfig[]>(() => {
+    const t = normalizeChartTypeForVisualQuery(draft?.chartType ?? 'table');
+    return chartTypeUsesNoDimensions(t) ? [] : (draft?.dimensions ?? []);
+  });
   const [metrics, setMetrics] = useState<MetricConfig[]>(draft?.metrics ?? []);
   const [filters, setFilters] = useState<FilterConfig[]>(draft?.filters ?? []);
   const [dynamicFilters, setDynamicFilters] = useState<DynamicFilterConfig[]>(draft?.dynamicFilters ?? []);
   const [dynamicFilterValues, setDynamicFilterValues] = useState<Record<string, string[]>>({});
-  const [drilldownConfig, setDrilldownConfig] = useState<DynamicDrilldownConfig | undefined>(() =>
-    normalizeDrilldownConfigForClient(draft?.drilldownConfig)
-  );
-  const [selectedDrilldownDimensions, setSelectedDrilldownDimensions] = useState<string[]>(
-    draft?.drilldownConfig?.defaultSelected ?? []
-  );
+  const [drilldownConfig, setDrilldownConfig] = useState<DynamicDrilldownConfig | undefined>(() => {
+    const t = normalizeChartTypeForVisualQuery(draft?.chartType ?? 'table');
+    return chartTypeUsesNoDimensions(t)
+      ? undefined
+      : normalizeDrilldownConfigForClient(draft?.drilldownConfig);
+  });
+  const [selectedDrilldownDimensions, setSelectedDrilldownDimensions] = useState<string[]>(() => {
+    const t = normalizeChartTypeForVisualQuery(draft?.chartType ?? 'table');
+    return chartTypeUsesNoDimensions(t) ? [] : (draft?.drilldownConfig?.defaultSelected ?? []);
+  });
   const [sort, setSort] = useState<SortConfig[]>(draft?.sort ?? []);
-  const [rtfTextConfig, setRtfTextConfig] = useState<RtfTextChartConfig>(
-    () => draft?.rtfTextConfig ?? defaultRtfTextChartConfig()
+  const [rtfTextConfig, setRtfTextConfig] = useState<RtfTextChartConfig>(() =>
+    normalizeRtfTextChartConfig(draft?.rtfTextConfig ?? null)
   );
   const [limit] = useState(500);
 
@@ -207,7 +218,8 @@ export function VisualQueryWorkspace({
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
 
-  const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  /** null 关闭；pin = 复制新图表并加入所选看板；update = 写回当前 chartId 与来源看板 */
+  const [pinDialogMode, setPinDialogMode] = useState<'pin' | 'update' | null>(null);
   const [chartName, setChartName] = useState(draft?.chartName ?? '未命名图表');
   const [confirmAddLoading, setConfirmAddLoading] = useState(false);
 
@@ -257,16 +269,25 @@ export function VisualQueryWorkspace({
       .get(editingChartId)
       .then(chart => {
         setSelectedView(chart.viewName);
-        setChartType(chart.chartType);
-        setDimensions(chart.dimensions);
+        const nextType = normalizeChartTypeForVisualQuery(chart.chartType);
+        setChartType(nextType);
+        if (isVisualQueryChartTypeDisabled(chart.chartType)) {
+          toast('漏斗图、地图在可视化查询中暂不支持，已切换为表格', 'info');
+        }
+        setDimensions(chartTypeUsesNoDimensions(nextType) ? [] : chart.dimensions);
         setMetrics(chart.metrics);
         setFilters(chart.filters);
         setDynamicFilters(chart.dynamicFilters ?? []);
-        setDrilldownConfig(chart.drilldownConfig);
-        setSelectedDrilldownDimensions(chart.drilldownConfig?.defaultSelected ?? []);
+        if (chartTypeUsesNoDimensions(nextType)) {
+          setDrilldownConfig(undefined);
+          setSelectedDrilldownDimensions([]);
+        } else {
+          setDrilldownConfig(chart.drilldownConfig);
+          setSelectedDrilldownDimensions(chart.drilldownConfig?.defaultSelected ?? []);
+        }
         setSort(chart.sort);
         setChartName(chart.name);
-        setRtfTextConfig(chart.rtfTextConfig ?? defaultRtfTextChartConfig());
+        setRtfTextConfig(normalizeRtfTextChartConfig(chart.rtfTextConfig ?? null));
         cubeProxyAPI
           .meta()
           .then(res => {
@@ -296,11 +317,17 @@ export function VisualQueryWorkspace({
   }, [cubeNameParam]);
 
   const handleChartTypeChange = useCallback((t: ChartType) => {
-    setChartType(t);
-    if (t === 'rtf-text') {
+    const next = normalizeChartTypeForVisualQuery(t);
+    setChartType(next);
+    if (chartTypeUsesNoDimensions(next)) {
       setDimensions([]);
       setDrilldownConfig(undefined);
       setSelectedDrilldownDimensions([]);
+    }
+    // 指标数超出限制时截断
+    const maxM = chartTypeMaxMetrics(next);
+    if (maxM != null) {
+      setMetrics(prev => prev.length > maxM ? prev.slice(0, maxM) : prev);
     }
   }, []);
 
@@ -316,13 +343,15 @@ export function VisualQueryWorkspace({
     setSelectedDrilldownDimensions([]);
     setSort([]);
     setQueryData([]);
-    setRtfTextConfig(defaultRtfTextChartConfig());
+    setRtfTextConfig(normalizeRtfTextChartConfig(null));
   }, []);
 
   const canRunQuery =
     chartType === 'rtf-text'
       ? rtfTextConfig.interpolationExpression.trim().length > 0
-      : metrics.length > 0 || dimensions.length > 0;
+      : chartType === 'number'
+        ? metrics.length > 0
+        : metrics.length > 0 || dimensions.length > 0;
 
   const handleRunQuery = useCallback(async () => {
     if (!canRunQuery) return;
@@ -364,53 +393,21 @@ export function VisualQueryWorkspace({
     selectedDrilldownDimensions,
   ]);
 
-  const handlePinToDashboard = useCallback(
-    async (dashboardId: number, modifiedChartName: string) => {
-      try {
-        const finalChartName = modifiedChartName || chartName;
-        if (finalChartName !== chartName) {
-          setChartName(finalChartName);
-        }
-        let chartId: number;
-        const chartData: Omit<ChartConfig, 'id' | 'createdAt' | 'updatedAt'> = {
-          name: finalChartName,
-          viewName: selectedView || '',
-          chartType,
-          dimensions: chartType === 'rtf-text' ? [] : dimensions,
-          metrics,
-          filters,
-          dynamicFilters,
-          drilldownConfig: chartType === 'rtf-text' ? undefined : drilldownConfig,
-          rtfTextConfig: chartType === 'rtf-text' ? rtfTextConfig : undefined,
-          sort,
-          limit,
-        };
-
-        if (editingChartId) {
-          await chartAPI.update(editingChartId, chartData);
-          chartId = editingChartId;
-        } else {
-          const chart = await chartAPI.create(chartData);
-          chartId = chart.id!;
-        }
-
-        await dashboardAPI.addChart(dashboardId, chartId);
-        const detail = await dashboardAPI.get(dashboardId);
-        const allChartIds = detail.charts.map(c => c.id!).filter(Boolean);
-        let nextLayout = migrateLayoutToTabOnly(detail.dashboard.layout || [], allChartIds);
-        nextLayout = mergeLayoutWithMainStackOrder(nextLayout, mainStackIdsInOrder(nextLayout));
-        await dashboardAPI.update(dashboardId, { layout: nextLayout });
-
-        setPinDialogOpen(false);
-        clearDraft();
-        navigate(`/dashboard/${dashboardId}`);
-      } catch (err) {
-        console.error('Error pinning chart to dashboard:', err);
-      }
-    },
+  const buildChartPayload = useCallback(
+    (finalChartName: string): Omit<ChartConfig, 'id' | 'createdAt' | 'updatedAt'> => ({
+      name: finalChartName,
+      viewName: selectedView || '',
+      chartType,
+      dimensions: chartTypeUsesNoDimensions(chartType) ? [] : dimensions,
+      metrics,
+      filters,
+      dynamicFilters,
+      drilldownConfig: chartTypeUsesNoDimensions(chartType) ? undefined : drilldownConfig,
+      rtfTextConfig: chartType === 'rtf-text' ? rtfTextConfig : undefined,
+      sort,
+      limit,
+    }),
     [
-      editingChartId,
-      chartName,
       selectedView,
       chartType,
       dimensions,
@@ -421,7 +418,60 @@ export function VisualQueryWorkspace({
       rtfTextConfig,
       sort,
       limit,
+    ]
+  );
+
+  const handlePinDialogConfirm = useCallback(
+    async (dashboardId: number, modifiedChartName: string) => {
+      const mode = pinDialogMode;
+      try {
+        const defaultName = chartType === 'rtf-text' ? '文本' : '未命名图表';
+        const finalChartName = modifiedChartName.trim() || chartName.trim() || defaultName;
+        if (finalChartName !== chartName) {
+          setChartName(finalChartName);
+        }
+        const chartData = buildChartPayload(finalChartName);
+
+        if (mode === 'update') {
+          if (!editingChartId || sourceDashboardId == null || dashboardId !== sourceDashboardId) {
+            return;
+          }
+          await chartAPI.update(editingChartId, chartData);
+          setPinDialogMode(null);
+          toast('图表已更新', 'success');
+          clearDraft();
+          navigate(`/dashboard/${dashboardId}`);
+          return;
+        }
+
+        // Pin：始终新建图表副本再加入看板（含从看板编辑后复制到其它看板）
+        const chart = await chartAPI.create(chartData);
+        const newChartId = chart.id!;
+
+        await dashboardAPI.addChart(dashboardId, newChartId);
+        const detail = await dashboardAPI.get(dashboardId);
+        const allChartIds = detail.charts.map(c => c.id!).filter(Boolean);
+        let nextLayout = migrateLayoutToTabOnly(detail.dashboard.layout || [], allChartIds);
+        nextLayout = mergeLayoutWithMainStackOrder(nextLayout, mainStackIdsInOrder(nextLayout));
+        await dashboardAPI.update(dashboardId, { layout: nextLayout });
+
+        setPinDialogMode(null);
+        clearDraft();
+        navigate(`/dashboard/${dashboardId}`);
+      } catch (err) {
+        console.error('Error pinning or updating chart:', err);
+        toast(mode === 'update' ? '更新失败' : 'Pin 失败', 'error');
+      }
+    },
+    [
+      pinDialogMode,
+      editingChartId,
+      sourceDashboardId,
+      chartName,
+      chartType,
+      buildChartPayload,
       navigate,
+      toast,
     ]
   );
 
@@ -429,7 +479,11 @@ export function VisualQueryWorkspace({
     if (variant !== 'embed' || !embed) return;
     if (!canRunQuery) {
       toast(
-        chartType === 'rtf-text' ? '请先填写展示文本（插值模板）' : '请至少配置维度或指标',
+        chartType === 'rtf-text'
+          ? '请先填写展示文本（插值模板）'
+          : chartType === 'number'
+            ? '请先配置至少一个指标'
+            : '请至少配置维度或指标',
         'error'
       );
       return;
@@ -437,14 +491,14 @@ export function VisualQueryWorkspace({
     setConfirmAddLoading(true);
     try {
       const chartData: Omit<ChartConfig, 'id' | 'createdAt' | 'updatedAt'> = {
-        name: chartName.trim() || '未命名图表',
+        name: chartType === 'rtf-text' ? chartName.trim() || '文本' : chartName.trim() || '未命名图表',
         viewName: selectedView || '',
         chartType,
-        dimensions: chartType === 'rtf-text' ? [] : dimensions,
+        dimensions: chartTypeUsesNoDimensions(chartType) ? [] : dimensions,
         metrics,
         filters,
         dynamicFilters,
-        drilldownConfig: chartType === 'rtf-text' ? undefined : drilldownConfig,
+        drilldownConfig: chartTypeUsesNoDimensions(chartType) ? undefined : drilldownConfig,
         rtfTextConfig: chartType === 'rtf-text' ? rtfTextConfig : undefined,
         sort,
         limit,
@@ -522,13 +576,15 @@ export function VisualQueryWorkspace({
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <input
-            type="text"
-            value={chartName}
-            onChange={e => setChartName(e.target.value)}
-            className="text-sm border border-gray-200 rounded px-2 py-1 w-36 sm:w-40 focus:outline-none focus:ring-1 focus:ring-blue-400"
-            placeholder="图表名称"
-          />
+          {chartType !== 'rtf-text' && (
+            <input
+              type="text"
+              value={chartName}
+              onChange={e => setChartName(e.target.value)}
+              className="text-sm border border-gray-200 rounded px-2 py-1 w-36 sm:w-40 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              placeholder="图表名称"
+            />
+          )}
           <button
             type="button"
             onClick={handleRunQuery}
@@ -557,14 +613,26 @@ export function VisualQueryWorkspace({
               </button>
             </>
           ) : (
-            <button
-              type="button"
-              onClick={() => setPinDialogOpen(true)}
-              disabled={!canRunQuery}
-              className="px-3 sm:px-4 py-1.5 bg-green-500 text-white rounded-md text-sm font-medium hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              📌 Pin 到看板
-            </button>
+            <>
+              {canUpdateSourceDashboardChart ? (
+                <button
+                  type="button"
+                  onClick={() => setPinDialogMode('update')}
+                  disabled={!canRunQuery}
+                  className="px-3 sm:px-4 py-1.5 border border-gray-300 bg-white text-gray-800 rounded-md text-sm font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+                >
+                  更新看板图表
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setPinDialogMode('pin')}
+                disabled={!canRunQuery}
+                className="px-3 sm:px-4 py-1.5 bg-green-500 text-white rounded-md text-sm font-medium hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+              >
+                📌 Pin 到看板
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -580,15 +648,11 @@ export function VisualQueryWorkspace({
             <ChartTypeSelector value={chartType} onChange={handleChartTypeChange} />
           </div>
 
-          {chartType !== 'rtf-text' ? (
+          {!chartTypeUsesNoDimensions(chartType) ? (
             <DimensionDropZone dimensions={dimensions} onChange={setDimensions} />
-          ) : (
-            <div className="rounded-lg border border-amber-200 bg-amber-50/50 px-3 py-2 text-xs text-amber-900/90">
-              文本图不使用维度，仅使用下方多个指标与插值模板。
-            </div>
-          )}
+          ) : null}
 
-          <MetricDropZone metrics={metrics} onChange={setMetrics} />
+          <MetricDropZone metrics={metrics} onChange={setMetrics} maxMetrics={chartTypeMaxMetrics(chartType)} />
 
           {chartType === 'rtf-text' && (
             <RtfTextChartConfigSection value={rtfTextConfig} onChange={setRtfTextConfig} />
@@ -608,7 +672,7 @@ export function VisualQueryWorkspace({
             cubeViewName={selectedView}
           />
 
-          {chartType !== 'rtf-text' && (
+          {!chartTypeUsesNoDimensions(chartType) && (
             <DynamicDrilldownConfigZone
               drilldownConfig={drilldownConfig}
               onDrilldownConfigChange={setDrilldownConfig}
@@ -626,32 +690,49 @@ export function VisualQueryWorkspace({
             onDynamicFilterChange={(field, values) => {
               setDynamicFilterValues(prev => ({ ...prev, [field]: values }));
             }}
-            drilldownConfig={chartType === 'rtf-text' ? undefined : drilldownConfig}
-            selectedDrilldownDimensions={chartType === 'rtf-text' ? [] : selectedDrilldownDimensions}
+            drilldownConfig={chartTypeUsesNoDimensions(chartType) ? undefined : drilldownConfig}
+            selectedDrilldownDimensions={chartTypeUsesNoDimensions(chartType) ? [] : selectedDrilldownDimensions}
             onDrilldownChange={setSelectedDrilldownDimensions}
             availableFields={selectedCube?.dimensions ?? []}
             availableDimensions={selectedCube?.dimensions ?? []}
             isEditMode={false}
           />
 
-          <div className="flex-1 p-4 overflow-auto min-h-0">
+          <div
+            className={`flex-1 min-h-0 p-4 ${
+              chartType === 'rtf-text' ? 'flex flex-col overflow-visible' : 'overflow-auto'
+            }`}
+          >
             {queryError ? (
               <div className="text-sm text-red-500 text-center py-8">{queryError}</div>
             ) : queryData.length > 0 ? (
-              <ChartRenderer
-                chartType={chartType}
-                data={queryData}
-                dimensions={chartType === 'rtf-text' ? [] : dimensions}
-                metrics={metrics}
-                rtfTextConfig={chartType === 'rtf-text' ? rtfTextConfig : undefined}
-              />
+              chartType === 'rtf-text' ? (
+                <div className="mb-auto w-full shrink-0">
+                  <ChartRenderer
+                    chartType={chartType}
+                    data={queryData}
+                    dimensions={[]}
+                    metrics={metrics}
+                    rtfTextConfig={rtfTextConfig}
+                  />
+                </div>
+              ) : (
+                <ChartRenderer
+                  chartType={chartType}
+                  data={queryData}
+                  dimensions={chartTypeUsesNoDimensions(chartType) ? [] : dimensions}
+                  metrics={metrics}
+                />
+              )
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-gray-300 min-h-[120px]">
                 <BarChart3Icon className="size-12 mb-3" />
                 <p className="text-sm">
                   {chartType === 'rtf-text'
                     ? '在插值模板中填写要展示的文本（可无指标，纯静态）后运行查询'
-                    : '配置维度和指标后运行查询'}
+                    : chartType === 'number'
+                      ? '配置至少一个指标后运行查询'
+                      : '配置维度和指标后运行查询'}
                 </p>
               </div>
             )}
@@ -659,12 +740,16 @@ export function VisualQueryWorkspace({
         </div>
       </div>
 
-      {!isEmbed && pinDialogOpen && (
+      {!isEmbed && pinDialogMode != null && (
         <PinToDashboardDialog
-          open={pinDialogOpen}
-          onClose={() => setPinDialogOpen(false)}
-          onPin={handlePinToDashboard}
+          open
+          onClose={() => setPinDialogMode(null)}
+          onPin={handlePinDialogConfirm}
           chartName={chartName}
+          hideChartNameInput={chartType === 'rtf-text'}
+          lockedDashboardId={pinDialogMode === 'update' ? sourceDashboardId : null}
+          dialogTitle={pinDialogMode === 'update' ? '更新看板图表' : 'Pin 到看板'}
+          confirmButtonLabel={pinDialogMode === 'update' ? '确认更新' : '确认 Pin'}
         />
       )}
     </div>

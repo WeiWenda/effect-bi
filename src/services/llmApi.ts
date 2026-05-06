@@ -1,7 +1,9 @@
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import type { RemoteThreadListAdapter } from '@assistant-ui/react';
 
-const API_BASE_URL = '/langgraph/api/v1';
+/** 与 vite `server.proxy['/langgraph']` 一致：开发时走 LangGraph，勿用 `/api`（指向 node 3001） */
+export const LANGGRAPH_API_V1_BASE = '/langgraph/api/v1';
+const API_BASE_URL = LANGGRAPH_API_V1_BASE;
 
 export interface User {
   id: number;

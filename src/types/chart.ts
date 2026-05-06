@@ -1,5 +1,31 @@
 export type ChartType = 'table' | 'line' | 'pie' | 'number' | 'bar' | 'funnel' | 'map' | 'rtf-text';
 
+/** 可视化查询页暂不支持的图表类型（看板等仍可能存 funnel/map） */
+export function isVisualQueryChartTypeDisabled(type: ChartType): boolean {
+  return type === 'funnel' || type === 'map';
+}
+
+/** 将可视化查询不支持的类型降级为表格，避免加载旧图表/草稿时报错 */
+export function normalizeChartTypeForVisualQuery(type: ChartType): ChartType {
+  return isVisualQueryChartTypeDisabled(type) ? 'table' : type;
+}
+
+/** 不配置维度 / 下钻的图表类型（数字图仅聚合指标；文本图用插值） */
+export function chartTypeUsesNoDimensions(type: ChartType): boolean {
+  return type === 'rtf-text' || type === 'number';
+}
+
+/** 图表类型允许的最大指标数；undefined 表示不限制 */
+export function chartTypeMaxMetrics(type: ChartType): number | undefined {
+  switch (type) {
+    case 'pie':
+    case 'number':
+      return 1;
+    default:
+      return undefined;
+  }
+}
+
 export type TimeGranularity = 'year' | 'quarter' | 'month' | 'week' | 'day' | 'hour' | 'minute';
 
 export type AggregationType = 'sum' | 'avg' | 'min' | 'max' | 'count' | 'countDistinct';
@@ -108,13 +134,14 @@ export interface SortConfig {
   direction: 'asc' | 'desc';
 }
 
-/** 文本图（RTF）：仅多指标、无维度；用占位符将指标值拼成一段 RTF */
+/** 文本图（RTF）：无维度；指标可选，纯静态或模板中用 {field} 引用指标 field；展示为插值后的富文本样式 */
 export interface RtfTextChartConfig {
   /** 插值模板，占位符为 `{指标字段名}`，与 Cube 返回列名一致 */
   interpolationExpression: string;
   fontSizePx: number;
   color: string;
-  fontFamily: string;
+  /** 文本块背景色（CSS，如 #fffbeb） */
+  backgroundColor: string;
 }
 
 export interface ChartConfig {

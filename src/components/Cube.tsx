@@ -14,6 +14,16 @@ const DEFAULT_BOTTOM_HEIGHT = 400;
 const MIN_BOTTOM_HEIGHT = 100;
 const MIN_TOP_HEIGHT = 150;
 
+/** 将标识转为 Cube.js 可用的 snake_case 片段 */
+function sanitizeCubeModelIdent(raw: string): string {
+  const s = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return s || 'cube';
+}
+
 const generateDefaultCubeJson = (): string => JSON.stringify([{
   name: 'example_cube',
   title: 'Example Cube',
@@ -32,6 +42,11 @@ const generateDefaultCubeJson = (): string => JSON.stringify([{
     customers: { sql: '{CUBE}.customer_id = {customers.id}', relationship: 'many_to_one' },
   },
 }], null, 2);
+
+interface GenerateCubeModelOptions {
+  /** 子 cube 名后缀，对应 `cube_versions.id`；保存新版本占位时可传 0 */
+  subcubeIdSuffix?: number | null;
+}
 
 interface CubeDetailPageProps {
   cubeName: string;
@@ -132,7 +147,7 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
   }, []);
 
   // Generate Cube.js Dynamic Data Model: model_json, model_yml, model_view
-  const generateCubeModel = useCallback((): { modelJson: string; modelYml: string; modelView: string } => {
+  const generateCubeModel = useCallback((opts?: GenerateCubeModelOptions): { modelJson: string; modelYml: string; modelView: string } => {
     if (nodes.length === 0 || fields.filter(f => f.isOutput).length === 0) {
       return { modelJson: JSON.stringify({ error: 'No tables or output fields configured yet' }, null, 2), modelYml: '', modelView: '' };
     }
@@ -151,13 +166,21 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
       list.push(f); fieldsByTable.set(tid, list);
     }
 
+    const explicitSuffix = opts?.subcubeIdSuffix;
+    const idSuffix =
+      explicitSuffix != null
+        ? String(explicitSuffix)
+        : currentVersion?.id != null
+          ? String(currentVersion.id)
+          : '0';
+
     // --- Generate model_json (cube models) ---
     const cubeModels: any[] = [];
-    // Build tableId -> cubeName mapping for view generation
+    // 子 cube 名：`{表名片段}_{cube_versions.id}`，避免再用工作空间 cube 名作前缀导致成员名过长
     const tableIdToCubeName = new Map<string, string>();
     for (const tn of tableNodes) {
-      const cName = tn.data.table!.toLowerCase().replace(/[^a-z0-9_]/g, '_');
-      tableIdToCubeName.set(tn.id, cName);
+      const base = sanitizeCubeModelIdent(tn.data.table!);
+      tableIdToCubeName.set(tn.id, `${base}_${idSuffix}`);
     }
     const factCubeNameStr = tableIdToCubeName.get(factNodeId || '') || ''
 
@@ -196,7 +219,9 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
         const tgt = nodes.find(n => n.id === edge.target);
         if (!src || !tgt || src.id !== tn.id) continue;
         const tgtIsFact = tgt.id === factNodeId;
-        const jName = tgtIsFact ? factCubeNameStr : (tableIdToCubeName.get(tgt.id) || tgt.data.table!.toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+        const jName = tgtIsFact
+          ? factCubeNameStr
+          : (tableIdToCubeName.get(tgt.id) || `${sanitizeCubeModelIdent(tgt.data.table!)}_${idSuffix}`);
         if (seen.has(jName)) continue; seen.add(jName);
         const relationship = isFact && !tgtIsFact ? 'many_to_one' : !isFact && tgtIsFact ? 'one_to_many' : 'many_to_one';
         joins[jName] = { sql: `{${cName}}.${ed.leftField} = {${jName}}.${ed.rightField}`, relationship };
@@ -245,12 +270,14 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
         const tgt = nodes.find(n => n.id === edge.target);
         if (!src || !tgt) continue;
         if (src.id === nodeId && !visited.has(tgt.id)) {
-          const tgtCubeName = tableIdToCubeName.get(tgt.id) || tgt.data.table!.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+          const tgtCubeName =
+            tableIdToCubeName.get(tgt.id) || `${sanitizeCubeModelIdent(tgt.data.table!)}_${idSuffix}`;
           visited.add(tgt.id);
           queue.push({ nodeId: tgt.id, path: [...path, tgtCubeName] });
         }
         if (tgt.id === nodeId && !visited.has(src.id)) {
-          const srcCubeName = tableIdToCubeName.get(src.id) || src.data.table!.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+          const srcCubeName =
+            tableIdToCubeName.get(src.id) || `${sanitizeCubeModelIdent(src.data.table!)}_${idSuffix}`;
           visited.add(src.id);
           queue.push({ nodeId: src.id, path: [...path, srcCubeName] });
         }
@@ -275,7 +302,7 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
 
     const viewDef = {
       views: [{
-        name: cubeName.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+        name: sanitizeCubeModelIdent(cubeName),
         cubes: viewCubes,
       }]
     };
@@ -286,7 +313,7 @@ export function CubeDetailPage({ cubeName, onBack }: CubeDetailPageProps): React
       modelYml: modelYmlStr,
       modelView: modelViewStr,
     };
-  }, [nodes, edges, fields, cubeName]);
+  }, [nodes, edges, fields, cubeName, currentVersion?.id]);
 
   const handleGenerateYaml = useCallback(() => {
     const result = generateCubeModel();

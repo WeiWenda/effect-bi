@@ -1,8 +1,13 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import GridLayout, { useContainerWidth, verticalCompactor } from 'react-grid-layout';
+import type { Layout, LayoutItem } from 'react-grid-layout';
+import 'react-grid-layout/css/styles.css';
+import 'react-resizable/css/styles.css';
 import { Trash2Icon, PencilIcon, PlusIcon, LayersIcon, ArrowRightLeftIcon, GripVerticalIcon } from 'lucide-react';
 import { ChartRenderer } from '../query-explore/ChartRenderer';
 import { ChartDynamicControls } from '../query-explore/ChartDynamicControls';
 import type { DashboardLayoutItem, ChartConfig, TabGroupTab, InnerChartLayout, DimensionConfig } from '../../types/chart';
+import { chartTypeUsesNoDimensions } from '../../types/chart';
 import { TAB_GROUP_GRID_GAP_PX, TAB_GROUP_INNER_ROW_HEIGHT_PX, TAB_GROUP_INNER_COLS } from '../../constants/dashboardLayout';
 import {
   Dialog,
@@ -21,6 +26,8 @@ export interface TabGroupRelocationTarget {
 
 interface TabGroupContainerProps {
   item: DashboardLayoutItem;
+  /** 用于新标签打开可视化查询编辑时带回「更新看板图表」所需看板 id */
+  dashboardId: number;
   charts: ChartConfig[];
   mode: 'edit' | 'preview';
   chartDataMap: Record<number, any[]>;
@@ -54,8 +61,26 @@ const DEFAULT_CHART_H = 4;
 const MIN_CHART_W = 3;
 const MIN_CHART_H = 2;
 
-function clamp(n: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, n));
+function innerLayoutFromRgl(layout: Layout, chartIds: number[]): InnerChartLayout[] {
+  const byI = new Map(layout.map(item => [item.i, item]));
+  return chartIds.map(chartId => {
+    const li = byI.get(String(chartId));
+    if (!li) return { chartId, x: 0, y: 0, w: DEFAULT_CHART_W, h: DEFAULT_CHART_H };
+    return { chartId, x: li.x, y: li.y, w: li.w, h: li.h };
+  });
+}
+
+function innerLayoutsEqual(a: InnerChartLayout[], b: InnerChartLayout[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].chartId !== b[i].chartId) return false;
+    if (a[i].x !== b[i].x || a[i].y !== b[i].y || a[i].w !== b[i].w || a[i].h !== b[i].h) return false;
+  }
+  return true;
+}
+
+function formatDragPlaceholderHint(ph: LayoutItem): string {
+  return `松开以放置：第 ${ph.y + 1} 行 · 第 ${ph.x + 1} 列 · 宽 ${ph.w} × 高 ${ph.h}`;
 }
 
 /** 新建标签页「标签 1」「标签2」、默认标签组首标签「默认」——预览时不展示标签栏 */
@@ -73,80 +98,9 @@ function isPlaceholderGroupTitleForPreview(title: string): boolean {
   return /^标签组\s*\d+$/.test(t);
 }
 
-/** Column width in px (12 equal tracks, 11 gaps). */
-function columnWidthPx(gridInnerWidth: number): number {
-  const g = TAB_GROUP_GRID_GAP_PX;
-  const cols = TAB_GROUP_INNER_COLS;
-  return (gridInnerWidth - g * (cols - 1)) / cols;
-}
-
-/** Convert pixel span to grid column units (approximate inverse of CSS grid span). */
-function pxToColSpan(px: number, gridInnerWidth: number): number {
-  const colW = columnWidthPx(gridInnerWidth);
-  const g = TAB_GROUP_GRID_GAP_PX;
-  return Math.max(1, Math.round((px + g) / (colW + g)));
-}
-
-function pxToRowSpan(px: number): number {
-  const g = TAB_GROUP_GRID_GAP_PX;
-  const row = TAB_GROUP_INNER_ROW_HEIGHT_PX;
-  return Math.max(1, Math.round((px + g) / (row + g)));
-}
-
-function computeDragPreview(
-  startX: number,
-  startY: number,
-  clientX: number,
-  clientY: number,
-  gridInnerWidth: number,
-  origX: number,
-  origY: number,
-  origW: number,
-  origH: number
-): { x: number; y: number; w: number; h: number } {
-  if (gridInnerWidth <= 0) {
-    return { x: origX, y: origY, w: origW, h: origH };
-  }
-  const colW = columnWidthPx(gridInnerWidth);
-  const g = TAB_GROUP_GRID_GAP_PX;
-  const stepX = colW + g;
-  const stepY = TAB_GROUP_INNER_ROW_HEIGHT_PX + g;
-  const dx = clientX - startX;
-  const dy = clientY - startY;
-  const deltaCols = Math.round(dx / stepX);
-  const deltaRows = Math.round(dy / stepY);
-  const nx = clamp(origX + deltaCols, 0, TAB_GROUP_INNER_COLS - origW);
-  const ny = Math.max(0, origY + deltaRows);
-  return { x: nx, y: ny, w: origW, h: origH };
-}
-
-function computeResizePreview(
-  startX: number,
-  startY: number,
-  clientX: number,
-  clientY: number,
-  gridInnerWidth: number,
-  anchorX: number,
-  anchorY: number,
-  origPxW: number,
-  origPxH: number
-): { x: number; y: number; w: number; h: number } {
-  if (gridInnerWidth <= 0) {
-    return { x: anchorX, y: anchorY, w: MIN_CHART_W, h: MIN_CHART_H };
-  }
-  const dx = clientX - startX;
-  const dy = clientY - startY;
-  const newPxW = Math.max(40, origPxW + dx);
-  const newPxH = Math.max(40, origPxH + dy);
-  let nw = pxToColSpan(newPxW, gridInnerWidth);
-  let nh = pxToRowSpan(newPxH);
-  nw = clamp(nw, MIN_CHART_W, TAB_GROUP_INNER_COLS - anchorX);
-  nh = clamp(nh, MIN_CHART_H, 80);
-  return { x: anchorX, y: anchorY, w: nw, h: nh };
-}
-
 export function TabGroupContainer({
   item,
+  dashboardId,
   charts,
   mode,
   chartDataMap,
@@ -185,9 +139,9 @@ export function TabGroupContainer({
     isPlaceholderTabLabelForPreview(tabs[0].label);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const innerGridRef = useRef<HTMLDivElement>(null);
+  const { width: rglWidth, containerRef: rglMeasureRef, mounted: rglMounted } = useContainerWidth();
   const [containerHeight, setContainerHeight] = useState<number | null>(null);
-  const [gridInnerWidth, setGridInnerWidth] = useState(0);
+  const [layoutDragHint, setLayoutDragHint] = useState<string | null>(null);
 
   const tabCharts = useMemo(() => {
     if (!activeTab) return [];
@@ -215,15 +169,16 @@ export function TabGroupContainer({
         };
       }
 
+      const chart = charts.find(c => c.id === chartId);
       const w = DEFAULT_CHART_W;
-      const h = DEFAULT_CHART_H;
+      const h = chart?.chartType === 'rtf-text' ? 2 : DEFAULT_CHART_H;
       const x = (idx % 2) * w;
       const y = currentY;
       if (idx % 2 === 1) currentY += h;
 
       return { chartId, x, y, w, h };
     });
-  }, [activeTab]);
+  }, [activeTab, charts]);
 
   const maxRowSpan = useMemo(() => {
     if (innerCells.length === 0) return 0;
@@ -238,29 +193,57 @@ export function TabGroupContainer({
     [activeTab, onInnerLayoutChange]
   );
 
-  const patchCell = useCallback(
-    (chartId: number, patch: Partial<Pick<InnerChartLayout, 'x' | 'y' | 'w' | 'h'>>) => {
-      const next = innerCells.map(c =>
-        c.chartId === chartId ? { ...c, ...patch, chartId } : c
-      );
+  const rglLayout: Layout = useMemo(() => {
+    if (!activeTab) return [];
+    const map = new Map(innerCells.map(c => [c.chartId, c]));
+    return activeTab.chartIds.map(id => {
+      const c = map.get(id);
+      const chart = charts.find(ch => ch.id === id);
+      const isRtfText = chart?.chartType === 'rtf-text';
+      return {
+        i: String(id),
+        x: c?.x ?? 0,
+        y: c?.y ?? 0,
+        w: c?.w ?? DEFAULT_CHART_W,
+        h: c?.h ?? DEFAULT_CHART_H,
+        minW: MIN_CHART_W,
+        minH: isRtfText ? 1 : MIN_CHART_H,
+      };
+    });
+  }, [activeTab, innerCells, charts]);
+
+  const handleRglLayoutChange = useCallback(
+    (layout: Layout) => {
+      if (!activeTab) return;
+      const next = innerLayoutFromRgl(layout, activeTab.chartIds);
+      if (innerLayoutsEqual(next, innerCells)) return;
       commitInnerLayout(next);
     },
-    [innerCells, commitInnerLayout]
+    [activeTab, innerCells, commitInnerLayout]
   );
 
-  useEffect(() => {
-    const el = innerGridRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(entries => {
-      const w = entries[0]?.contentRect.width ?? 0;
-      setGridInnerWidth(w);
-    });
-    ro.observe(el);
-    setGridInnerWidth(el.getBoundingClientRect().width);
-    return () => ro.disconnect();
-  }, [activeTab?.id, maxRowSpan]);
+  const handleDragMove = useCallback(
+    (_layout: Layout, _oldItem: LayoutItem | null, _newItem: LayoutItem | null, placeholder: LayoutItem | null) => {
+      setLayoutDragHint(placeholder ? formatDragPlaceholderHint(placeholder) : null);
+    },
+    []
+  );
+
+  const handleResizeMove = useCallback(
+    (_layout: Layout, _oldItem: LayoutItem | null, newItem: LayoutItem | null) => {
+      if (newItem) {
+        setLayoutDragHint(`当前尺寸：宽 ${newItem.w} × 高 ${newItem.h} 格`);
+      }
+    },
+    []
+  );
+
+  const clearLayoutHint = useCallback(() => setLayoutDragHint(null), []);
 
   const hasDynamicControls = useCallback((chart: ChartConfig): boolean => {
+    if (chartTypeUsesNoDimensions(chart.chartType)) {
+      return Boolean(chart.dynamicFilters && chart.dynamicFilters.length > 0);
+    }
     return Boolean(
       (chart.dynamicFilters && chart.dynamicFilters.length > 0) || chart.drilldownConfig?.enabled
     );
@@ -268,6 +251,8 @@ export function TabGroupContainer({
 
   const getEffectiveDimensions = useCallback(
     (chart: ChartConfig) => {
+      if (chartTypeUsesNoDimensions(chart.chartType)) return [];
+
       const currentDrilldownSelections =
         chartDrilldownSelections[chart.id!] || (chart.drilldownConfig?.defaultSelected ?? []);
 
@@ -323,7 +308,7 @@ export function TabGroupContainer({
   return (
     <div
       ref={containerRef}
-      className="bg-white rounded-lg border-2 border-purple-300 shadow-md overflow-hidden flex flex-col"
+      className="bg-white rounded-lg border border-purple-400/20 shadow-sm overflow-hidden flex flex-col"
       style={{ height: containerHeight ? `${containerHeight}px` : 'auto', minHeight: '200px' }}
     >
       {showGroupHeader && (
@@ -403,48 +388,71 @@ export function TabGroupContainer({
                 </span>
               </div>
             ) : (
-              <div ref={innerGridRef} className="flex-1 min-h-0 w-full">
-                <div
-                  className="grid w-full min-h-0"
-                  style={{
-                    gridTemplateColumns: `repeat(${TAB_GROUP_INNER_COLS}, minmax(0, 1fr))`,
-                    gridTemplateRows: `repeat(${Math.max(maxRowSpan, 1)}, minmax(${TAB_GROUP_INNER_ROW_HEIGHT_PX}px, auto))`,
-                    gridAutoRows: `minmax(${TAB_GROUP_INNER_ROW_HEIGHT_PX}px, auto)`,
-                    gap: TAB_GROUP_GRID_GAP_PX,
-                  }}
-                >
-                  {tabCharts.map(chart => {
-                    const cell = innerCells.find(c => c.chartId === chart.id);
-                    if (!cell || !chart.id) return null;
-
-                    return (
-                      <TabInnerChartCard
-                        key={chart.id}
-                        chart={chart}
-                        cell={cell}
-                        gridInnerWidth={gridInnerWidth}
-                        isEdit={isEdit}
-                        chartDataMap={chartDataMap}
-                        loadingData={loadingData}
-                        chartDynamicFilterValues={chartDynamicFilterValues}
-                        chartDrilldownSelections={chartDrilldownSelections}
-                        getEffectiveDimensions={getEffectiveDimensions}
-                        hasDynamicControls={hasDynamicControls}
-                        allAvailableFields={allAvailableFields}
-                        onDynamicFilterChange={onDynamicFilterChange}
-                        onDrilldownChange={onDrilldownChange}
-                        onChartConfigChange={onChartConfigChange}
-                        onRemoveChart={onRemoveChart}
-                        relocationTargets={relocationTargets}
-                        tabGroupWidgetId={item.i}
-                        onMoveChartToTab={onMoveChartToTab}
-                        activeTabId={activeTab.id}
-                        onPatchCell={patchCell}
-                        highlightChartIds={highlightChartIds}
-                      />
-                    );
-                  })}
-                </div>
+              <div ref={rglMeasureRef} className="tab-group-inner-rgl relative flex-1 min-h-0 w-full min-w-0">
+                {layoutDragHint ? (
+                  <div
+                    className="pointer-events-none absolute bottom-2 left-1/2 z-[30] max-w-[min(100%,22rem)] -translate-x-1/2 rounded-md bg-gray-900/90 px-3 py-1.5 text-center text-xs leading-snug text-white shadow-md"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {layoutDragHint}
+                  </div>
+                ) : null}
+                {rglMounted && rglWidth > 0 ? (
+                  <GridLayout
+                    key={activeTab.id}
+                    className="min-h-0"
+                    width={rglWidth}
+                    layout={rglLayout}
+                    gridConfig={{
+                      cols: TAB_GROUP_INNER_COLS,
+                      rowHeight: TAB_GROUP_INNER_ROW_HEIGHT_PX,
+                      margin: [TAB_GROUP_GRID_GAP_PX, TAB_GROUP_GRID_GAP_PX],
+                      containerPadding: [0, 0],
+                    }}
+                    dragConfig={{
+                      enabled: isEdit,
+                      handle: '.tab-inner-chart-drag-handle',
+                      cancel: 'input,textarea,button,select,a,.chart-card-action,.chart-content',
+                    }}
+                    resizeConfig={{ enabled: isEdit }}
+                    compactor={verticalCompactor}
+                    onLayoutChange={handleRglLayoutChange}
+                    onDrag={handleDragMove}
+                    onDragStop={clearLayoutHint}
+                    onResize={handleResizeMove}
+                    onResizeStop={clearLayoutHint}
+                  >
+                    {tabCharts.map(chart => {
+                      if (!chart.id) return null;
+                      return (
+                        <div key={String(chart.id)} className="min-h-0 min-w-0">
+                          <TabInnerChartCard
+                            chart={chart}
+                            dashboardId={dashboardId}
+                            isEdit={isEdit}
+                            chartDataMap={chartDataMap}
+                            loadingData={loadingData}
+                            chartDynamicFilterValues={chartDynamicFilterValues}
+                            chartDrilldownSelections={chartDrilldownSelections}
+                            getEffectiveDimensions={getEffectiveDimensions}
+                            hasDynamicControls={hasDynamicControls}
+                            allAvailableFields={allAvailableFields}
+                            onDynamicFilterChange={onDynamicFilterChange}
+                            onDrilldownChange={onDrilldownChange}
+                            onChartConfigChange={onChartConfigChange}
+                            onRemoveChart={onRemoveChart}
+                            relocationTargets={relocationTargets}
+                            tabGroupWidgetId={item.i}
+                            onMoveChartToTab={onMoveChartToTab}
+                            activeTabId={activeTab.id}
+                            highlightChartIds={highlightChartIds}
+                          />
+                        </div>
+                      );
+                    })}
+                  </GridLayout>
+                ) : null}
               </div>
             )}
           </div>
@@ -458,8 +466,7 @@ export function TabGroupContainer({
 
 function TabInnerChartCard({
   chart,
-  cell,
-  gridInnerWidth,
+  dashboardId,
   isEdit,
   chartDataMap,
   loadingData,
@@ -476,12 +483,10 @@ function TabInnerChartCard({
   tabGroupWidgetId,
   onMoveChartToTab,
   activeTabId,
-  onPatchCell,
   highlightChartIds,
 }: {
   chart: ChartConfig;
-  cell: InnerChartLayout;
-  gridInnerWidth: number;
+  dashboardId: number;
   isEdit: boolean;
   chartDataMap: Record<number, any[]>;
   loadingData: Set<number>;
@@ -498,7 +503,6 @@ function TabInnerChartCard({
   tabGroupWidgetId: string;
   onMoveChartToTab: (chartId: number, fromTabId: string, toTabGroupId: string, toTabId: string) => void;
   activeTabId: string;
-  onPatchCell: (chartId: number, patch: Partial<Pick<InnerChartLayout, 'x' | 'y' | 'w' | 'h'>>) => void;
   highlightChartIds?: number[];
 }): React.JSX.Element {
   const moveOptions = useMemo(() => {
@@ -535,208 +539,6 @@ function TabInnerChartCard({
     chartDrilldownSelections[chart.id!] || (chart.drilldownConfig?.defaultSelected ?? []);
   const effectiveDimensions = getEffectiveDimensions(chart);
 
-  const [previewRect, setPreviewRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  const displayCell = previewRect ?? {
-    x: cell.x,
-    y: cell.y,
-    w: cell.w,
-    h: cell.h,
-  };
-
-  useEffect(() => {
-    setPreviewRect(null);
-  }, [cell.x, cell.y, cell.w, cell.h, chart.id]);
-
-  const dragRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    origX: number;
-    origY: number;
-    origW: number;
-    origH: number;
-  } | null>(null);
-
-  const resizeRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    origW: number;
-    origH: number;
-    origPxW: number;
-    origPxH: number;
-    anchorX: number;
-    anchorY: number;
-  } | null>(null);
-
-  const onDragPointerDown = (e: React.PointerEvent) => {
-    if (!isEdit) return;
-    e.stopPropagation();
-    e.preventDefault();
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    dragRef.current = {
-      pointerId: e.pointerId,
-      startX: e.clientX,
-      startY: e.clientY,
-      origX: cell.x,
-      origY: cell.y,
-      origW: cell.w,
-      origH: cell.h,
-    };
-    setPreviewRect({
-      x: cell.x,
-      y: cell.y,
-      w: cell.w,
-      h: cell.h,
-    });
-  };
-
-  const onDragPointerMove = (e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (!d || e.pointerId !== d.pointerId) return;
-    e.stopPropagation();
-    const next = computeDragPreview(
-      d.startX,
-      d.startY,
-      e.clientX,
-      e.clientY,
-      gridInnerWidth,
-      d.origX,
-      d.origY,
-      d.origW,
-      d.origH
-    );
-    setPreviewRect(next);
-  };
-
-  const onDragPointerUp = (e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (!d || e.pointerId !== d.pointerId) return;
-    e.stopPropagation();
-    try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    dragRef.current = null;
-
-    const next = computeDragPreview(
-      d.startX,
-      d.startY,
-      e.clientX,
-      e.clientY,
-      gridInnerWidth,
-      d.origX,
-      d.origY,
-      d.origW,
-      d.origH
-    );
-    setPreviewRect(null);
-    if (next.x !== d.origX || next.y !== d.origY) {
-      onPatchCell(chart.id!, { x: next.x, y: next.y });
-    }
-  };
-
-  const onDragPointerCancel = (e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (!d || e.pointerId !== d.pointerId) return;
-    e.stopPropagation();
-    try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    dragRef.current = null;
-    setPreviewRect(null);
-  };
-
-  const onResizePointerDown = (e: React.PointerEvent) => {
-    if (!isEdit) return;
-    e.stopPropagation();
-    e.preventDefault();
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    const colW = columnWidthPx(gridInnerWidth);
-    const g = TAB_GROUP_GRID_GAP_PX;
-    const origPxW = cell.w * colW + (cell.w - 1) * g;
-    const origPxH = cell.h * TAB_GROUP_INNER_ROW_HEIGHT_PX + (cell.h - 1) * g;
-    resizeRef.current = {
-      pointerId: e.pointerId,
-      startX: e.clientX,
-      startY: e.clientY,
-      origW: cell.w,
-      origH: cell.h,
-      origPxW,
-      origPxH,
-      anchorX: cell.x,
-      anchorY: cell.y,
-    };
-    setPreviewRect({
-      x: cell.x,
-      y: cell.y,
-      w: cell.w,
-      h: cell.h,
-    });
-  };
-
-  const onResizePointerMove = (e: React.PointerEvent) => {
-    const r = resizeRef.current;
-    if (!r || e.pointerId !== r.pointerId) return;
-    e.stopPropagation();
-    const next = computeResizePreview(
-      r.startX,
-      r.startY,
-      e.clientX,
-      e.clientY,
-      gridInnerWidth,
-      r.anchorX,
-      r.anchorY,
-      r.origPxW,
-      r.origPxH
-    );
-    setPreviewRect(next);
-  };
-
-  const onResizePointerUp = (e: React.PointerEvent) => {
-    const r = resizeRef.current;
-    if (!r || e.pointerId !== r.pointerId) return;
-    e.stopPropagation();
-    try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    resizeRef.current = null;
-
-    const next = computeResizePreview(
-      r.startX,
-      r.startY,
-      e.clientX,
-      e.clientY,
-      gridInnerWidth,
-      r.anchorX,
-      r.anchorY,
-      r.origPxW,
-      r.origPxH
-    );
-    setPreviewRect(null);
-    if (next.w !== r.origW || next.h !== r.origH) {
-      onPatchCell(chart.id!, { w: next.w, h: next.h });
-    }
-  };
-
-  const onResizePointerCancel = (e: React.PointerEvent) => {
-    const r = resizeRef.current;
-    if (!r || e.pointerId !== r.pointerId) return;
-    e.stopPropagation();
-    try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    resizeRef.current = null;
-    setPreviewRect(null);
-  };
-
   const isHighlight =
     chart.id != null &&
     highlightChartIds != null &&
@@ -746,72 +548,85 @@ function TabInnerChartCard({
   return (
     <div
       data-chart-id={chart.id ?? undefined}
-      className={`bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden flex flex-col min-h-0 relative transition-shadow ${
+      className={`group bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden flex h-full min-h-0 w-full min-w-0 flex-col relative transition-shadow ${
         isHighlight ? 'ring-2 ring-blue-500 ring-offset-2 z-[1]' : ''
       }`}
-      style={{
-        gridColumn: `${displayCell.x + 1} / span ${displayCell.w}`,
-        gridRow: `${displayCell.y + 1} / span ${displayCell.h}`,
-      }}
-      onPointerDown={e => e.stopPropagation()}
     >
-      <div className="flex items-center justify-between px-2 py-1 border-b border-gray-100 bg-gray-50/50 shrink-0">
-        <div className="flex items-center gap-1.5 min-w-0">
-          {isEdit && (
-            <span
-              className="tab-inner-chart-drag-handle cursor-grab active:cursor-grabbing touch-none p-0.5 -m-0.5"
-              onPointerDown={onDragPointerDown}
-              onPointerMove={onDragPointerMove}
-              onPointerUp={onDragPointerUp}
-              onPointerCancel={onDragPointerCancel}
+      {/* rtf-text 预览模式：不展示标题栏，编辑按钮浮动在右上角 */}
+      {!(chart.chartType === 'rtf-text' && !isEdit) && (
+        <div className="flex items-center justify-between px-2 py-1 border-b border-gray-100 bg-gray-50/50 shrink-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {isEdit && (
+              <span
+                className="tab-inner-chart-drag-handle cursor-grab active:cursor-grabbing touch-none p-0.5 -m-0.5"
+                title="拖拽调整位置"
+              >
+                <GripVerticalIcon className="size-3.5 text-gray-400 pointer-events-none" />
+              </span>
+            )}
+            {chart.chartType !== 'rtf-text' && (
+              <span className="text-xs font-medium text-gray-700 truncate">{chart.name}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                window.open(`/query?chartId=${chart.id}&dashboardId=${dashboardId}`, '_blank');
+              }}
+              className={`chart-card-action p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-blue-500 transition-colors ${!isEdit ? 'opacity-0 group-hover:opacity-100' : ''}`}
+              title="编辑图表"
             >
-              <GripVerticalIcon className="size-3.5 text-gray-300 pointer-events-none" />
-            </span>
-          )}
-          <span className="text-xs font-medium text-gray-700 truncate">{chart.name}</span>
+              <PencilIcon className="size-3" />
+            </button>
+            {isEdit && (
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation();
+                  if (moveOptions.length === 0) return;
+                  setMoveDialogOpen(true);
+                }}
+                disabled={moveOptions.length === 0}
+                className="chart-card-action p-1 hover:bg-purple-50 rounded text-gray-400 hover:text-purple-600 transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                title={moveOptions.length === 0 ? '没有其他标签可移动' : '移到其他标签或标签组'}
+              >
+                <ArrowRightLeftIcon className="size-3" />
+              </button>
+            )}
+            {isEdit && onRemoveChart && chart.id != null && (
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation();
+                  setRemoveDialogOpen(true);
+                }}
+                className="chart-card-action p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-500 transition-colors"
+                title="从看板彻底删除该图表"
+              >
+                <Trash2Icon className="size-3" />
+              </button>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-0.5 shrink-0">
+      )}
+      {/* rtf-text 预览模式：浮动编辑按钮 */}
+      {chart.chartType === 'rtf-text' && !isEdit && (
+        <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             type="button"
             onClick={e => {
               e.stopPropagation();
-              window.open(`/query?chartId=${chart.id}`, '_blank');
+              window.open(`/query?chartId=${chart.id}&dashboardId=${dashboardId}`, '_blank');
             }}
-            className="chart-card-action p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-blue-500 transition-colors"
+            className="chart-card-action p-1 hover:bg-gray-100/80 rounded text-gray-400 hover:text-blue-500 transition-colors"
             title="编辑图表"
           >
             <PencilIcon className="size-3" />
           </button>
-          {isEdit && (
-            <button
-              type="button"
-              onClick={e => {
-                e.stopPropagation();
-                if (moveOptions.length === 0) return;
-                setMoveDialogOpen(true);
-              }}
-              disabled={moveOptions.length === 0}
-              className="chart-card-action p-1 hover:bg-purple-50 rounded text-gray-400 hover:text-purple-600 transition-colors disabled:opacity-40 disabled:pointer-events-none"
-              title={moveOptions.length === 0 ? '没有其他标签可移动' : '移到其他标签或标签组'}
-            >
-              <ArrowRightLeftIcon className="size-3" />
-            </button>
-          )}
-          {isEdit && onRemoveChart && chart.id != null && (
-            <button
-              type="button"
-              onClick={e => {
-                e.stopPropagation();
-                setRemoveDialogOpen(true);
-              }}
-              className="chart-card-action p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-500 transition-colors"
-              title="从看板彻底删除该图表"
-            >
-              <Trash2Icon className="size-3" />
-            </button>
-          )}
         </div>
-      </div>
+      )}
 
       <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
         <DialogContent className="sm:max-w-md" showCloseButton>
@@ -909,21 +724,23 @@ function TabInnerChartCard({
               });
               onDynamicFilterChange(chart.id!, field, []);
             }}
-            drilldownConfig={chart.drilldownConfig}
-            selectedDrilldownDimensions={currentDrilldownSelections}
+            drilldownConfig={chartTypeUsesNoDimensions(chart.chartType) ? undefined : chart.drilldownConfig}
+            selectedDrilldownDimensions={
+              chartTypeUsesNoDimensions(chart.chartType) ? [] : currentDrilldownSelections
+            }
             onDrilldownChange={dims => {
               onDrilldownChange(chart.id!, dims);
             }}
             availableFields={allAvailableFields}
             availableDimensions={allAvailableFields.filter(f =>
-              chart.drilldownConfig?.dimensions.some(d => d.field === f.name)
+              (chart.drilldownConfig?.dimensions ?? []).some(d => d.field === f.name)
             )}
             isEditMode={false}
           />
         </div>
       )}
 
-      <div className="flex-1 min-h-0 p-2 chart-content">
+      <div className="flex flex-1 min-h-0 flex-col p-2 chart-content">
         {isEdit ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-300">
             <ChartTypeIcon type={chart.chartType} />
@@ -939,27 +756,28 @@ function TabInnerChartCard({
           <div className="flex items-center justify-center h-full">
             <div className="size-5 animate-spin rounded-full border-2 border-gray-200 border-t-blue-400" />
           </div>
+        ) : chart.chartType === 'rtf-text' ? (
+          <div className="flex items-center justify-center min-h-0 w-full h-full overflow-visible">
+            <ChartRenderer
+              chartType={chart.chartType}
+              data={data}
+              dimensions={effectiveDimensions}
+              metrics={chart.metrics}
+              rtfTextConfig={chart.rtfTextConfig}
+            />
+          </div>
         ) : (
-          <ChartRenderer
-            chartType={chart.chartType}
-            data={data}
-            dimensions={effectiveDimensions}
-            metrics={chart.metrics}
-            rtfTextConfig={chart.rtfTextConfig}
-          />
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <ChartRenderer
+              chartType={chart.chartType}
+              data={data}
+              dimensions={effectiveDimensions}
+              metrics={chart.metrics}
+              rtfTextConfig={chart.rtfTextConfig}
+            />
+          </div>
         )}
       </div>
-
-      {isEdit && (
-        <div
-          className="tab-inner-resize-handle absolute bottom-0 right-0 w-4 h-4 cursor-se-resize z-10 bg-gray-200/80 border border-gray-300 rounded-tl"
-          title="拖动调整大小"
-          onPointerDown={onResizePointerDown}
-          onPointerMove={onResizePointerMove}
-          onPointerUp={onResizePointerUp}
-          onPointerCancel={onResizePointerCancel}
-        />
-      )}
     </div>
   );
 }

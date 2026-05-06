@@ -11,7 +11,7 @@ interface VersionManageDialogProps {
   cubeName: string;
   canvasData: { nodes: any[]; edges: any[]; viewport?: { x: number; y: number; zoom: number } };
   fieldList: any[];
-  generateModel: () => { modelJson: string; modelYml: string; modelView: string };
+  generateModel: (opts?: { subcubeIdSuffix?: number | null }) => { modelJson: string; modelYml: string; modelView: string };
   onLoadVersion: (version: { canvas_data: any; field_list: any; model_json: any; model_yml: string; model_view: string; remark: string; id: number; is_published: boolean }) => void;
   onPreviewYaml: (tab: 'model' | 'view') => void;
 }
@@ -40,8 +40,24 @@ export function VersionManageDialog({ open, onClose, cubeName, canvasData, field
   const handleSave = async () => {
     setSaving(true);
     try {
-      const { modelJson, modelYml, modelView } = generateModel();
-      await cubeAPI.saveVersion({ name: cubeName, remark: saveRemark || undefined, canvasData: { nodes: canvasData.nodes, edges: canvasData.edges, viewport: canvasData.viewport }, fieldList, modelJson, modelYml, modelView });
+      // INSERT 时尚无新版本 id：先用 0 占位，再以 RETURNING id 重新生成子 cube 名并 PATCH，使子 cube 为 `{table}_{cube_versions.id}`
+      const provisional = generateModel({ subcubeIdSuffix: 0 });
+      const saveRes = await cubeAPI.saveVersion({
+        name: cubeName,
+        remark: saveRemark || undefined,
+        canvasData: { nodes: canvasData.nodes, edges: canvasData.edges, viewport: canvasData.viewport },
+        fieldList,
+        modelJson: provisional.modelJson,
+        modelYml: provisional.modelYml,
+        modelView: provisional.modelView,
+      });
+      const newId = saveRes.version.id;
+      const finalModels = generateModel({ subcubeIdSuffix: newId });
+      await cubeAPI.patchVersionModels(newId, {
+        modelJson: finalModels.modelJson,
+        modelYml: finalModels.modelYml,
+        modelView: finalModels.modelView,
+      });
       toast('版本保存成功', 'success');
       setSaveRemark(''); setShowSaveInput(false);
       await loadVersions();

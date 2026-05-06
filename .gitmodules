@@ -1,0 +1,3 @@
+[submodule "backend/langgraph"]
+	path = backend/langgraph
+	url = https://github.com/WeiWenda/chatbot-backend.git

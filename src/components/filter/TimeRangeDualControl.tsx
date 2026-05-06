@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react
 import { createPortal } from 'react-dom';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
-import type { TimeRangeBound, TimeRangeSpec, TimeRelativeUnit } from '../../types/chart';
+import type { TimeRangeSpec, TimeRelativeUnit } from '../../types/chart';
 import {
   TIME_RELATIVE_UNITS,
   formatDateYMD,
@@ -21,6 +21,13 @@ function cloneSpec(s: TimeRangeSpec): TimeRangeSpec {
 
 function buildPresets(): { label: string; getSpec: () => TimeRangeSpec }[] {
   return [
+    {
+      label: '昨日',
+      getSpec: () => ({
+        start: { kind: 'relative', relativeAmount: 1, relativeUnit: 'days' },
+        end: { kind: 'relative', relativeAmount: 1, relativeUnit: 'days' },
+      }),
+    },
     {
       label: '近7天',
       getSpec: () => ({

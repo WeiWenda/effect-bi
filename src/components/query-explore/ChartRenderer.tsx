@@ -3,17 +3,78 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
 import type { ChartType, MetricConfig, RtfTextChartConfig } from '../../types/chart';
-import { interpolateMetricTemplate, buildMinimalRtfParagraph } from '../../utils/rtfTextInterpolation';
+import {
+  borderColorForBackground,
+  interpolateMetricTemplate,
+  normalizeRtfTextChartConfig,
+} from '../../utils/rtfTextInterpolation';
+
+const RTF_TEXT_DISPLAY_FONT =
+  'system-ui, "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif';
 
 const COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+
+interface ChartDimensionCol {
+  field: string;
+  title?: string;
+  timeGranularity?: string;
+}
 
 interface ChartRendererProps {
   chartType: ChartType;
   data: any[];
-  dimensions: { field: string; title?: string }[];
+  dimensions: ChartDimensionCol[];
   metrics: { field: string; title?: string }[];
   /** chartType 为 rtf-text 时使用 */
   rtfTextConfig?: RtfTextChartConfig;
+}
+
+/** Cube 结果里时间维度常为 `member.granularity`，与配置里的 `field` 对齐 */
+function cubeRowKeyForDimension(dim: ChartDimensionCol, sampleRow: Record<string, unknown>): string {
+  if (dim.timeGranularity) {
+    const withGran = `${dim.field}.${dim.timeGranularity}`;
+    if (withGran in sampleRow) return withGran;
+  }
+  return dim.field;
+}
+
+function parseMeasureValue(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number' && !Number.isNaN(v)) return v;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function compareXValues(a: unknown, b: unknown): number {
+  const sa = a == null ? '' : String(a);
+  const sb = b == null ? '' : String(b);
+  const da = Date.parse(sa);
+  const db = Date.parse(sb);
+  if (!Number.isNaN(da) && !Number.isNaN(db) && sa.includes('T')) return da - db;
+  return sa.localeCompare(sb);
+}
+
+const SERIES_PART_SEP = '\u001f';
+
+function seriesTupleKey(row: Record<string, unknown>, splitDims: ChartDimensionCol[], sampleRow: Record<string, unknown>): string {
+  return splitDims
+    .map(d => {
+      const k = cubeRowKeyForDimension(d, sampleRow);
+      const v = row[k];
+      return v == null ? '' : String(v);
+    })
+    .join(SERIES_PART_SEP);
+}
+
+function formatSeriesLegendLabel(tupleKey: string, splitDims: ChartDimensionCol[]): string {
+  const parts = tupleKey.split(SERIES_PART_SEP);
+  return splitDims
+    .map((d, i) => {
+      const label = d.title || d.field;
+      const v = parts[i] ?? '';
+      return v === '' ? label : `${label}: ${v}`;
+    })
+    .join(' · ');
 }
 
 function TableRenderer({ data, dimensions, metrics }: Omit<ChartRendererProps, 'chartType'>): React.JSX.Element {
@@ -52,29 +113,91 @@ function TableRenderer({ data, dimensions, metrics }: Omit<ChartRendererProps, '
 }
 
 function LineChartRenderer({ data, dimensions, metrics }: Omit<ChartRendererProps, 'chartType'>): React.JSX.Element {
-  if (data.length === 0) {
+  if (data.length === 0 || metrics.length === 0) {
     return <div className="text-sm text-gray-400 text-center py-8">无数据</div>;
   }
 
-  const xKey = dimensions[0]?.field;
+  const sampleRow = (data[0] ?? {}) as Record<string, unknown>;
+  const xDim = dimensions[0];
+  if (!xDim) {
+    return <div className="text-sm text-gray-400 text-center py-8">请配置横轴维度</div>;
+  }
+  const xKey = cubeRowKeyForDimension(xDim, sampleRow);
+  const splitDims = dimensions.length > 1 ? dimensions.slice(1) : [];
+
+  // 仅首维为 X（时间）：多分类维时透视成宽表，每条线 = 其余维度取值组合 × 指标
+  let chartData: Record<string, unknown>[];
+  let lineDefs: { key: string; dataKey: string; name: string; colorIndex: number }[];
+
+  if (splitDims.length === 0) {
+    chartData = [...data].sort((a, b) => compareXValues(a[xKey], b[xKey]));
+    lineDefs = metrics.map((metric, idx) => ({
+      key: metric.field,
+      dataKey: metric.field,
+      name: metric.title || metric.field,
+      colorIndex: idx,
+    }));
+  } else {
+    const uniqueTimes = [...new Set(data.map(r => r[xKey]))].sort(compareXValues);
+    const seriesKeys = [...new Set(data.map(r => seriesTupleKey(r as Record<string, unknown>, splitDims, sampleRow)))].sort(
+      (a, b) => a.localeCompare(b)
+    );
+
+    lineDefs = [];
+    let ln = 0;
+    for (const sk of seriesKeys) {
+      for (const m of metrics) {
+        lineDefs.push({
+          key: `__ln_${ln}`,
+          dataKey: `__ln_${ln}`,
+          name:
+            metrics.length > 1
+              ? `${formatSeriesLegendLabel(sk, splitDims)} · ${m.title || m.field}`
+              : formatSeriesLegendLabel(sk, splitDims),
+          colorIndex: ln,
+        });
+        ln++;
+      }
+    }
+
+    chartData = uniqueTimes.map(t => {
+      const row: Record<string, unknown> = { [xKey]: t };
+      let i = 0;
+      for (const sk of seriesKeys) {
+        for (const m of metrics) {
+          const src = data.find(
+            r =>
+              r[xKey] === t &&
+              seriesTupleKey(r as Record<string, unknown>, splitDims, sampleRow) === sk
+          ) as Record<string, unknown> | undefined;
+          row[`__ln_${i}`] = src != null ? parseMeasureValue(src[m.field]) : null;
+          i++;
+        }
+      }
+      return row;
+    });
+  }
+
+  const dot = chartData.length < 50;
 
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={data} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+      <LineChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
         <XAxis dataKey={xKey} tick={{ fontSize: 12 }} />
         <YAxis tick={{ fontSize: 12 }} />
         <Tooltip />
         <Legend />
-        {metrics.map((metric, idx) => (
+        {lineDefs.map(def => (
           <Line
-            key={metric.field}
+            key={def.key}
             type="monotone"
-            dataKey={metric.field}
-            name={metric.title || metric.field}
-            stroke={COLORS[idx % COLORS.length]}
+            dataKey={def.dataKey}
+            name={def.name}
+            stroke={COLORS[def.colorIndex % COLORS.length]}
             strokeWidth={2}
-            dot={data.length < 50}
+            dot={dot}
+            connectNulls
           />
         ))}
       </LineChart>
@@ -83,26 +206,105 @@ function LineChartRenderer({ data, dimensions, metrics }: Omit<ChartRendererProp
 }
 
 function BarChartRenderer({ data, dimensions, metrics }: Omit<ChartRendererProps, 'chartType'>): React.JSX.Element {
-  if (data.length === 0) {
+  if (data.length === 0 || metrics.length === 0) {
     return <div className="text-sm text-gray-400 text-center py-8">无数据</div>;
   }
 
-  const xKey = dimensions[0]?.field;
+  const sampleRow = (data[0] ?? {}) as Record<string, unknown>;
+  const xDim = dimensions[0];
+  if (!xDim) {
+    return <div className="text-sm text-gray-400 text-center py-8">请配置横轴维度</div>;
+  }
+  const xKey = cubeRowKeyForDimension(xDim, sampleRow);
+  /** 与查询构建一致：带 timeGranularity 的维度走 Cube timeDimensions，结果列为 `field.granularity` */
+  const isTimeFirst = Boolean(xDim.timeGranularity);
+  const splitDims = dimensions.length > 1 ? dimensions.slice(1) : [];
+
+  let chartData: Record<string, unknown>[];
+  let barDefs: { key: string; dataKey: string; name: string; colorIndex: number }[];
+
+  if (isTimeFirst) {
+    if (splitDims.length === 0) {
+      chartData = [...data].sort((a, b) => compareXValues(a[xKey], b[xKey]));
+      barDefs = metrics.map((metric, idx) => ({
+        key: metric.field,
+        dataKey: metric.field,
+        name: metric.title || metric.field,
+        colorIndex: idx,
+      }));
+    } else {
+      const uniqueTimes = [...new Set(data.map(r => r[xKey]))].sort(compareXValues);
+      const seriesKeys = [...new Set(data.map(r => seriesTupleKey(r as Record<string, unknown>, splitDims, sampleRow)))].sort(
+        (a, b) => a.localeCompare(b)
+      );
+
+      barDefs = [];
+      let bi = 0;
+      for (const sk of seriesKeys) {
+        for (const m of metrics) {
+          barDefs.push({
+            key: `__br_${bi}`,
+            dataKey: `__br_${bi}`,
+            name:
+              metrics.length > 1
+                ? `${formatSeriesLegendLabel(sk, splitDims)} · ${m.title || m.field}`
+                : formatSeriesLegendLabel(sk, splitDims),
+            colorIndex: bi,
+          });
+          bi++;
+        }
+      }
+
+      chartData = uniqueTimes.map(t => {
+        const row: Record<string, unknown> = { [xKey]: t };
+        let i = 0;
+        for (const sk of seriesKeys) {
+          for (const m of metrics) {
+            const src = data.find(
+              r =>
+                r[xKey] === t &&
+                seriesTupleKey(r as Record<string, unknown>, splitDims, sampleRow) === sk
+            ) as Record<string, unknown> | undefined;
+            row[`__br_${i}`] = src != null ? parseMeasureValue(src[m.field]) : null;
+            i++;
+          }
+        }
+        return row;
+      });
+    }
+  } else {
+    chartData = [...data].sort((a, b) => compareXValues(a[xKey], b[xKey]));
+    barDefs = metrics.map((metric, idx) => ({
+      key: metric.field,
+      dataKey: metric.field,
+      name: metric.title || metric.field,
+      colorIndex: idx,
+    }));
+  }
+
+  /** 首维为时间：略留类目间距便于扫日期，尽量让柱更宽 */
+  const barCategoryGap = isTimeFirst ? '12%' : '18%';
+  const barGap = isTimeFirst ? 2 : 4;
 
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={data} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+      <BarChart
+        data={chartData}
+        margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+        barCategoryGap={barCategoryGap}
+        barGap={barGap}
+      >
         <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
         <XAxis dataKey={xKey} tick={{ fontSize: 12 }} />
         <YAxis tick={{ fontSize: 12 }} />
         <Tooltip />
         <Legend />
-        {metrics.map((metric, idx) => (
+        {barDefs.map(def => (
           <Bar
-            key={metric.field}
-            dataKey={metric.field}
-            name={metric.title || metric.field}
-            fill={COLORS[idx % COLORS.length]}
+            key={def.key}
+            dataKey={def.dataKey}
+            name={def.name}
+            fill={COLORS[def.colorIndex % COLORS.length]}
           />
         ))}
       </BarChart>
@@ -115,22 +317,45 @@ function PieChartRenderer({ data, dimensions, metrics }: Omit<ChartRendererProps
     return <div className="text-sm text-gray-400 text-center py-8">无数据</div>;
   }
 
-  const nameKey = dimensions[0]?.field;
-  const valueKey = metrics[0]?.field;
+  const dim0 = dimensions[0];
+  const met0 = metrics[0];
+  if (!dim0 || !met0) {
+    return <div className="text-sm text-gray-400 text-center py-8">饼图需配置 1 个维度和 1 个指标</div>;
+  }
+
+  const sampleRow = (data[0] ?? {}) as Record<string, unknown>;
+  const nameKey = cubeRowKeyForDimension(dim0, sampleRow);
+  const valueKey = met0.field;
+  /** Recharts 3 扇区求和只用 `typeof val === 'number'`；Cube 常返回字符串指标，会导致 sum=0 无法绘制 */
+  const pieRows = (data as Record<string, unknown>[]).map(row => {
+    const n = parseMeasureValue(row[valueKey]);
+    return { ...row, [valueKey]: n ?? 0 };
+  });
+  const sum = pieRows.reduce((acc, row) => {
+    const v = row[valueKey];
+    return acc + (typeof v === 'number' && !Number.isNaN(v) ? v : 0);
+  }, 0);
+  if (sum <= 0) {
+    return <div className="text-sm text-gray-400 text-center py-8">指标值无效或均为 0，无法绘制饼图</div>;
+  }
+
   return (
     <ResponsiveContainer width="100%" height="100%">
       <PieChart>
         <Pie
-          data={data}
+          data={pieRows}
           dataKey={valueKey}
           nameKey={nameKey}
           cx="50%"
           cy="50%"
           outerRadius="70%"
-          label={({ name, percent }: any) => `${name}: ${(percent * 100).toFixed(0)}%`}
+          label={({ name, percent }: { name?: unknown; percent?: number }) => {
+            const p = typeof percent === 'number' && !Number.isNaN(percent) ? percent * 100 : 0;
+            return `${name != null ? String(name) : ''}: ${p.toFixed(0)}%`;
+          }}
           labelLine={false}
         >
-          {data.map((_, idx) => (
+          {pieRows.map((_, idx) => (
             <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
           ))}
         </Pie>
@@ -150,12 +375,7 @@ function RtfTextRenderer({
   metrics: MetricConfig[];
   rtfTextConfig?: RtfTextChartConfig;
 }): React.JSX.Element {
-  const cfg: RtfTextChartConfig = rtfTextConfig ?? {
-    interpolationExpression: '',
-    fontSizePx: 16,
-    color: '#111827',
-    fontFamily: 'system-ui, sans-serif',
-  };
+  const cfg = normalizeRtfTextChartConfig(rtfTextConfig);
 
   if (data.length === 0) {
     return <div className="text-sm text-gray-400 text-center py-8">无数据</div>;
@@ -163,27 +383,23 @@ function RtfTextRenderer({
 
   const row = (data[0] ?? {}) as Record<string, unknown>;
   const display = interpolateMetricTemplate(cfg.interpolationExpression, row);
-  const rtf = buildMinimalRtfParagraph(display, cfg);
+  const frameBorder = borderColorForBackground(cfg.backgroundColor);
 
   return (
-    <div className="flex h-full flex-col gap-3 overflow-auto p-2">
+    <div className="min-h-0 w-full overflow-visible px-2 py-0.5">
       <div
-        className="rounded-lg border border-amber-100 bg-amber-50/30 p-4 leading-relaxed shadow-sm"
+        className="box-border rounded-lg border border-solid px-3 py-1.5 leading-normal shadow-sm"
         style={{
           fontSize: `${cfg.fontSizePx}px`,
           color: cfg.color,
-          fontFamily: cfg.fontFamily,
+          backgroundColor: cfg.backgroundColor,
+          borderColor: frameBorder,
+          fontFamily: RTF_TEXT_DISPLAY_FONT,
           whiteSpace: 'pre-wrap',
         }}
       >
         {display || <span className="text-gray-400">（模板为空）</span>}
       </div>
-      <details className="text-xs text-gray-500">
-        <summary className="cursor-pointer select-none text-amber-800/80 hover:text-amber-900">查看 / 复制 RTF 片段</summary>
-        <pre className="mt-2 max-h-40 overflow-auto rounded border border-gray-200 bg-gray-50 p-2 font-mono text-[10px] leading-snug text-gray-700">
-          {rtf}
-        </pre>
-      </details>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeftIcon, EditIcon, EyeIcon, Trash2Icon, FilterIcon, SaveIcon, PencilIcon, FileTextIcon, LayersIcon, PlusIcon } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -13,6 +13,7 @@ import { TabGroupContainer } from './TabGroupContainer';
 import { TabGroupOrderSidebar } from './TabGroupOrderSidebar';
 import { VisualQueryWorkspace } from '../query-explore/VisualQueryWorkspace';
 import type { DashboardInfo, ChartConfig, FilterConfig, DashboardLayoutItem, DashboardWidgetType, TabGroupTab, InnerChartLayout } from '../../types/chart';
+import { chartTypeUsesNoDimensions } from '../../types/chart';
 import {
   migrateLayoutToTabOnly,
   mergeLayoutWithMainStackOrder,
@@ -48,6 +49,12 @@ export function DashboardDetailPage({ dashboardId, onBack }: DashboardDetailPage
   const [chartDynamicFilterValues, setChartDynamicFilterValues] = useState<Record<number, Record<string, string[]>>>({});
   // 每个图表的维度下钻选中状态
   const [chartDrilldownSelections, setChartDrilldownSelections] = useState<Record<number, string[]>>({});
+
+  // 用 ref 保存最新值，供 bulk-load useEffect 读取而不触发重载
+  const chartDynamicFilterValuesRef = useRef(chartDynamicFilterValues);
+  chartDynamicFilterValuesRef.current = chartDynamicFilterValues;
+  const chartDrilldownSelectionsRef = useRef(chartDrilldownSelections);
+  chartDrilldownSelectionsRef.current = chartDrilldownSelections;
   const [highlightChartIds, setHighlightChartIds] = useState<number[]>([]);
   const loadDashboard = useCallback(async () => {
     setLoading(true);
@@ -79,7 +86,7 @@ export function DashboardDetailPage({ dashboardId, onBack }: DashboardDetailPage
 
   const mainStackOrderIds = useMemo(() => mainStackIdsInOrder(layout), [layout]);
 
-  // Load chart data in preview mode
+  // Load chart data in preview mode（仅在看板级条件变化时全量刷新，单图动态过滤/下钻由 reloadSingleChart 处理）
   useEffect(() => {
     if (mode !== 'preview' || charts.length === 0) return;
 
@@ -87,6 +94,10 @@ export function DashboardDetailPage({ dashboardId, onBack }: DashboardDetailPage
       const newLoading = new Set<number>();
       charts.forEach(c => { if (c.id) newLoading.add(c.id); });
       setLoadingData(newLoading);
+
+      // 从 ref 读取最新动态过滤/下钻值，避免将它们加入依赖导致全量刷新
+      const latestFilterValues = chartDynamicFilterValuesRef.current;
+      const latestDrilldownSelections = chartDrilldownSelectionsRef.current;
 
       for (const chart of charts) {
         if (!chart.id) continue;
@@ -98,8 +109,8 @@ export function DashboardDetailPage({ dashboardId, onBack }: DashboardDetailPage
           const cubeQuery = buildCubeQueryFromChart(
             chart, 
             dashboardFilters,
-            chartDynamicFilterValues[chart.id],
-            chartDrilldownSelections[chart.id]
+            latestFilterValues[chart.id],
+            latestDrilldownSelections[chart.id]
           );
           const result = await cubeProxyAPI.load(cubeQuery);
           setChartDataMap(prev => ({
@@ -119,7 +130,7 @@ export function DashboardDetailPage({ dashboardId, onBack }: DashboardDetailPage
     };
 
     loadAllChartData();
-  }, [mode, charts, dashboardFilters, chartDynamicFilterValues, chartDrilldownSelections]);
+  }, [mode, charts, dashboardFilters]);
 
   // 刷新单个图表数据（用于动态过滤器或下钻维度变化时）
   const reloadSingleChart = useCallback(async (
@@ -315,7 +326,7 @@ export function DashboardDetailPage({ dashboardId, onBack }: DashboardDetailPage
   };
 
   const handleEditChart = (chartId: number) => {
-    navigate(`/query?chartId=${chartId}`);
+    navigate(`/query?chartId=${chartId}&dashboardId=${dashboardId}`);
   };
 
   const handleRemoveChart = async (chartId: number) => {
@@ -532,6 +543,7 @@ export function DashboardDetailPage({ dashboardId, onBack }: DashboardDetailPage
                     <div key={item.i} className="w-full">
                       <TabGroupContainer
                         item={item}
+                        dashboardId={dashboardId}
                         charts={charts}
                         mode={mode}
                         chartDataMap={chartDataMap}
@@ -644,18 +656,20 @@ function buildCubeQueryFromChart(
     limit: chart.limit || 500,
   };
 
-  // 基础维度
-  for (const dim of chart.dimensions) {
-    if (dim.timeGranularity) {
-      query.timeDimensions.push({ dimension: dim.field, granularity: dim.timeGranularity });
-    } else {
-      query.dimensions.push(dim.field);
+  // 基础维度（数字图 / 文本图不查维度）
+  if (!chartTypeUsesNoDimensions(chart.chartType)) {
+    for (const dim of chart.dimensions) {
+      if (dim.timeGranularity) {
+        query.timeDimensions.push({ dimension: dim.field, granularity: dim.timeGranularity });
+      } else {
+        query.dimensions.push(dim.field);
+      }
     }
   }
-  
-  // 下钻维度（文本图无维度）
+
+  // 下钻维度（文本图 / 数字图无维度）
   if (
-    chart.chartType !== 'rtf-text' &&
+    !chartTypeUsesNoDimensions(chart.chartType) &&
     chart.drilldownConfig?.enabled &&
     drilldownSelections &&
     drilldownSelections.length > 0

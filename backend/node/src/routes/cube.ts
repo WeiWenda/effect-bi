@@ -253,6 +253,49 @@ router.get('/versions/:id', async (req: Request, res: Response): Promise<void> =
 });
 
 /**
+ * Update generated model artifacts for a version (e.g. after INSERT when sub-cube names use the version id suffix)
+ * PATCH /api/cube/versions/:id/models
+ * Body: { modelJson: string, modelYml: string, modelView: string }
+ */
+router.patch('/versions/:id/models', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const idRaw = req.params.id;
+    const id = Number(Array.isArray(idRaw) ? idRaw[0] : idRaw);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: 'Invalid version id' });
+      return;
+    }
+    const { modelJson, modelYml, modelView } = req.body as {
+      modelJson?: string;
+      modelYml?: string;
+      modelView?: string;
+    };
+    if (typeof modelJson !== 'string' || typeof modelYml !== 'string' || typeof modelView !== 'string') {
+      res.status(400).json({ error: 'modelJson, modelYml, and modelView (strings) are required' });
+      return;
+    }
+
+    const result = await pool.query(
+      `UPDATE cube_versions
+       SET model_json = $2::jsonb, model_yml = $3, model_view = $4, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING id, name, remark, is_published, canvas_data, field_list, model_json, model_yml, model_view, created_at, updated_at`,
+      [id, modelJson, modelYml, modelView]
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Version not found' });
+      return;
+    }
+
+    res.json({ version: result.rows[0] });
+  } catch (error) {
+    console.error('Error patching cube version models:', error);
+    res.status(500).json({ error: 'Failed to update cube version models' });
+  }
+});
+
+/**
  * Save a new version
  * POST /api/cube/versions
  * Body: { name, remark?, canvasData, fieldList, yamlContent }

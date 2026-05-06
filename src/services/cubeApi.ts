@@ -66,6 +66,12 @@ export interface SaveVersionResponse {
   version: CubeVersion;
 }
 
+export interface PatchVersionModelsRequest {
+  modelJson: string;
+  modelYml: string;
+  modelView: string;
+}
+
 export interface PublishVersionResponse {
   version: CubeVersion;
 }
@@ -113,6 +119,14 @@ export const cubeAPI = {
     const response: AxiosResponse<SaveVersionResponse> = await axios.post(
       `${CUBE_API_BASE_URL}/versions`,
       data
+    );
+    return response.data;
+  },
+
+  patchVersionModels: async (id: number, body: PatchVersionModelsRequest): Promise<SaveVersionResponse> => {
+    const response: AxiosResponse<SaveVersionResponse> = await axios.patch(
+      `${CUBE_API_BASE_URL}/versions/${id}/models`,
+      body
     );
     return response.data;
   },

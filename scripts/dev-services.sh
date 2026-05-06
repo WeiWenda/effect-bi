@@ -31,6 +31,18 @@ LANGGRAPH_DIR="$ROOT/backend/langgraph"
 
 log() { echo "[dev-services] $*"; }
 
+# 返回在 port 上 TCP LISTEN 的进程 pid（无则空）；需系统有 lsof（macOS/Linux 常见）
+# 注意：pipefail 下「无监听」时 lsof 退出码为 1，必须用 || true，否则 set -e 会终止整个 dev-services 脚本。
+_listen_pid_on_port() {
+  local port="$1" line
+  if ! command -v lsof >/dev/null 2>&1; then
+    echo ""
+    return 0
+  fi
+  line="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -1)" || line=""
+  echo "${line:-}"
+}
+
 is_running() {
   local pid="$1"
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
@@ -84,10 +96,22 @@ cmd_stop() {
 }
 
 start_langgraph() {
-  local p
+  local p listen_pid
   p=$(read_pid "langgraph")
+  if [[ -n "$p" ]] && ! is_running "$p"; then
+    log "清理 langgraph 过期 pid 文件 (was pid=${p})"
+    rm -f "$PID_DIR/langgraph.pid"
+    p=""
+  fi
   if is_running "$p"; then
     log "langgraph 已在运行 (pid=${p})，跳过。"
+    return 0
+  fi
+
+  listen_pid="$(_listen_pid_on_port "$LANGGRAPH_PORT")"
+  if [[ -n "$listen_pid" ]]; then
+    log "langgraph 未启动：端口 ${LANGGRAPH_PORT} 已被占用 (LISTEN pid=${listen_pid})，即 uvicorn 报错 [Errno 48] Address already in use。"
+    log "处理：先执行 npm run dev:stop 再启动；或结束占用进程: kill ${listen_pid}；或换端口 LANGGRAPH_PORT=8002（并令根目录 .env 中 VITE_LANGGRAPH_PROXY_TARGET 指向同一端口）。"
     return 0
   fi
 

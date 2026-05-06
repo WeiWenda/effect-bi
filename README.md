@@ -7,6 +7,63 @@ Currently, two official plugins are available:
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
 - [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
 
+## Git 仓库初始化
+
+本仓库为前端主工程；**`backend/langgraph`** 通过 **Git submodule** 指向 LangGraph / FastAPI 后端仓库 [`WeiWenda/chatbot-backend`](https://github.com/WeiWenda/chatbot-backend)。
+
+### 首次克隆（推荐）
+
+在仓库根目录一并拉取子模块，避免 `backend/langgraph` 为空：
+
+```bash
+git clone --recurse-submodules https://github.com/WeiWenda/chatbot-frontend.git chatbot
+cd chatbot
+```
+
+### 已克隆但子模块目录为空
+
+在仓库根目录执行：
+
+```bash
+git submodule update --init --recursive
+```
+
+### 日常拉取代码后
+
+父仓库 `git pull` 后若子模块有更新，建议再执行：
+
+```bash
+git submodule update --init --recursive
+```
+
+### 将子模块跟踪到远端最新提交（可选）
+
+会把父仓库里的子模块指针指到 `chatbot-backend` 默认分支的最新提交，**产生待提交变更**，按需再 `git add` / `commit`：
+
+```bash
+git submodule update --remote backend/langgraph
+```
+
+### 子模块本地开发
+
+```bash
+cd backend/langgraph
+# 参考 .env.example 配置环境（如 .env.development，已被 .gitignore 忽略）
+uv sync
+```
+
+若需将子模块 URL 改为 SSH，可编辑根目录 `.gitmodules` 中的 `url` 后执行：`git submodule sync`。
+
+### 排错：LangGraph `[Errno 48] Address already in use`
+
+表示 **默认端口 `8001`（或你设置的 `LANGGRAPH_PORT`）已被其它进程占用**（常见：上次 `dev:all` 未正常停止、本机另起了 uvicorn）。
+
+1. 在仓库根执行 **`npm run dev:stop`** 后再 **`npm run dev:all`**。  
+2. 若仍占用，查谁占用了端口（macOS）：`lsof -nP -iTCP:8001 -sTCP:LISTEN`，再 **`kill <pid>`**（确认无业务影响后再杀）。  
+3. 改用其它端口：例如 **`LANGGRAPH_PORT=8002 npm run dev:all`**，并在仓库根 `.env` 中设置 **`VITE_LANGGRAPH_PROXY_TARGET=http://127.0.0.1:8002`**（单独跑 `npm run dev` 时同样需要）。
+
+`scripts/dev-services.sh` 在启动前会检测端口占用并打印上述提示，避免仅看到 `.dev-pids/langgraph.log` 里的 uvicorn 报错。
+
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.

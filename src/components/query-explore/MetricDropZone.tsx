@@ -1,9 +1,12 @@
 import { XIcon } from 'lucide-react';
 import type { MetricConfig, AggregationType } from '../../types/chart';
+import { useToast } from '../ui/toast';
 
 interface MetricDropZoneProps {
   metrics: MetricConfig[];
   onChange: (metrics: MetricConfig[]) => void;
+  /** 最大指标数限制；undefined 表示不限制 */
+  maxMetrics?: number;
 }
 
 const AGGREGATION_OPTIONS: { value: AggregationType; label: string }[] = [
@@ -15,7 +18,8 @@ const AGGREGATION_OPTIONS: { value: AggregationType; label: string }[] = [
   { value: 'countDistinct', label: '去重计数 (COUNT DISTINCT)' },
 ];
 
-export function MetricDropZone({ metrics, onChange }: MetricDropZoneProps): React.JSX.Element {
+export function MetricDropZone({ metrics, onChange, maxMetrics }: MetricDropZoneProps): React.JSX.Element {
+  const { toast } = useToast();
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -23,6 +27,11 @@ export function MetricDropZone({ metrics, onChange }: MetricDropZoneProps): Reac
       const data = JSON.parse(e.dataTransfer.getData('application/json'));
       // Avoid duplicates
       if (metrics.some(m => m.field === data.name)) return;
+      // 已达上限时提示用户先删除后添加
+      if (maxMetrics != null && metrics.length >= maxMetrics) {
+        toast(`该图表最多支持 ${maxMetrics} 个指标，请先删除已有指标再添加`, 'info');
+        return;
+      }
 
       const newMetric: MetricConfig = {
         field: data.name,
