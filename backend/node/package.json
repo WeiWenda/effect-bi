@@ -13,7 +13,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "description": "Neo4j lineage backend service",
   "dependencies": {
     "@types/pg": "^8.20.0",

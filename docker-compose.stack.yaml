@@ -22,6 +22,7 @@
 # Cube: host dir ./docker/stack/cube-home → effect-bi CUBE_HOME (/cube-home) and Cube project root (/cube/conf); override CUBE_HOST_DIR.
 # Gravitino: `gravitino-init` creates metalake `effectbi` + JDBC catalog `localpg` → pgvector DB `lineage` (override METALAKE_NAME / PG_CATALOG_NAME).
 # ETL/Cube demo: `effect-bi-init` uses the same image as `pgvector` (PGVECTOR_IMAGE) — only `psql`, no extra client image.
+# It waits until effect-bi migrations create `public.etl_folders`, then applies demo SQL once inside a transaction and records `public.effect_bi_demo_seed` (see run-effect-bi-demo-data.sh).
 
 name: effect-bi-stack
 
@@ -239,8 +240,15 @@ services:
         condition: service_healthy
       airflow-apiserver:
         condition: service_healthy
+    # node:bookworm-slim has no curl/wget; use Node's fetch (available in Node 18+).
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -259,6 +267,7 @@ services:
       PGPASSWORD: ${STACK_POSTGRES_PASSWORD:-stacksecret}
       PGDATABASE: lineage
       EFFECT_BI_DEMO_SQL_FILE: /insert-demo-data.sql
+      EFFECT_BI_DEMO_SEED_ID: ${EFFECT_BI_DEMO_SEED_ID:-}
     volumes:
       - ./docker/stack/pg-init/insert-demo-data.sql:/insert-demo-data.sql:ro
       - ./docker/stack/pg-init/run-effect-bi-demo-data.sh:/run-effect-bi-demo-data.sh:ro

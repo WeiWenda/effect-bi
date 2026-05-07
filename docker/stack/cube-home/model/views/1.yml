@@ -1,0 +1,17 @@
+views:
+  - name: test_cube
+    cubes:
+      - join_path: etl_task_info_1
+        includes:
+          - id
+          - name
+          - neo4j_node_id
+          - table_name
+          - catalog_name
+          - database_name
+          - owner_name
+          - owner_email
+          - folder_id
+          - folder_sort_order
+          - created_at
+          - updated_at
