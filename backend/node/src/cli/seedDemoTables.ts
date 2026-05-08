@@ -1,24 +1,12 @@
 /**
- * Creates PostgreSQL schema `demo` and 20 demo tables for local testing
- * (运行依赖 / 产出表 等选择器的占位数据).
+ * Creates PostgreSQL schema `demo` and demo tables (运行依赖 / 产出表 等占位).
+ * Env 由 `src/config/postgres.ts` 加载（与 API 一致）。
  *
- * Env: `backend/node/.env` (PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD).
- * Tables are created under schema **`demo`** (not `public`). List with:
- *   psql: `\dn demo` then `\dt demo.*`
- *   SQL: `SELECT tablename FROM pg_tables WHERE schemaname = 'demo';`
- * Docker pgvector default from host: PG_HOST=127.0.0.1 PG_PORT=5434 PG_DATABASE=lineage PG_USER=stack
- *
- * Run: `cd backend/node && npm run mock-table`
+ * 本地: `cd backend/node && npm run mock-table`
+ * Docker: `node dist/cli/seedDemoTables.js`（由 docker-entrypoint 调用）
  */
-import path from 'path';
-import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
 import type { PoolClient } from 'pg';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, '../.env') });
-
-const { pool } = await import('../src/config/postgres.js');
+import { pool } from '../config/postgres.js';
 
 /** Safe for use as unquoted PostgreSQL role identifier in GRANT … TO … */
 function pgRoleIdent(raw: string): string {

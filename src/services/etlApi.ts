@@ -50,6 +50,8 @@ export interface EtlTablePartitionDetailRow {
 
 export interface EtlTaskVersion {
   id: number;
+  /** `etl_task_info.id`，与发布后 Airflow `dag_id`（`auto_generate_{id}`）一致 */
+  etlTaskInfoId: number;
   name: string;
   remark: string;
   isPublished: boolean;
@@ -213,6 +215,23 @@ export const etlAPI = {
     }
   },
 
+  /** 按 etl_task_info.id（Neo4j `etl_task_id`）解析逻辑任务名 */
+  getTaskNameByInfoId: async (
+    etlTaskInfoId: number,
+    opts?: { signal?: AbortSignal }
+  ): Promise<{ name: string } | null> => {
+    try {
+      const response = await axios.get<{ name: string }>(`${ETL_API_BASE_URL}/task-name-by-info-id`, {
+        params: { id: etlTaskInfoId },
+        signal: opts?.signal,
+      });
+      return response.data;
+    } catch (e) {
+      if (isAxiosError(e) && e.response?.status === 404) return null;
+      throw e;
+    }
+  },
+
   listTasks: async (): Promise<{ tasks: EtlTaskListRow[] }> => {
     const response = await axios.get(`${ETL_API_BASE_URL}/tasks`);
     return response.data;
@@ -238,6 +257,19 @@ export const etlAPI = {
     taskOutput: EtlTaskOutput
   ): Promise<{ taskOutput: EtlTaskOutput }> => {
     const response = await axios.patch(`${ETL_API_BASE_URL}/tasks/output`, { name, taskOutput });
+    return response.data;
+  },
+
+  /** 逻辑名（可改名）+ 产出表一次写入 PG，并同步 etl_airflow_deployments.logical_task_name */
+  patchTaskProfile: async (body: {
+    fromName: string;
+    name: string;
+    taskOutput: EtlTaskOutput;
+  }): Promise<{ name: string; taskOutput: EtlTaskOutput }> => {
+    const response: AxiosResponse<{ name: string; taskOutput: EtlTaskOutput }> = await axios.patch(
+      `${ETL_API_BASE_URL}/tasks/profile`,
+      body
+    );
     return response.data;
   },
 

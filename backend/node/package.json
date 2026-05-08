@@ -7,8 +7,10 @@
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "migrate": "tsx scripts/run-migration.ts",
-    "mock-table": "tsx scripts/mock-table.ts",
+    "migrate": "tsx src/cli/runMigrations.ts",
+    "migrate:dist": "node dist/cli/runMigrations.js",
+    "mock-table": "tsx src/cli/seedDemoTables.ts",
+    "mock-table:dist": "node dist/cli/seedDemoTables.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

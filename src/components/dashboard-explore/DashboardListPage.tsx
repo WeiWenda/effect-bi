@@ -334,14 +334,22 @@ export function DashboardListPage(): React.JSX.Element {
     }
     const src = dashboards.find(d => d.id === srcId);
     const tgt = dashboards.find(d => d.id === targetDashId);
-    if (!src || !tgt || (src.folder_id ?? null) !== (tgt.folder_id ?? null)) {
-      toast('请在同一文件夹内调整顺序', 'error');
+    if (!src || !tgt) {
       clearDashboardDragUi();
       return;
     }
-    const siblings = dashboardsInFolder(folderContextId);
+    const destFolderId = tgt.folder_id ?? null;
+    if ((folderContextId ?? null) !== (destFolderId ?? null)) {
+      clearDashboardDragUi();
+      return;
+    }
+    const siblings = dashboardsInFolder(destFolderId).filter(d => d.id !== srcId);
     const targetIndex = siblings.findIndex(s => s.id === targetDashId);
-    const tgtOrder = tgt.sort_order;
+    if (targetIndex < 0) {
+      clearDashboardDragUi();
+      return;
+    }
+    const tgtOrder = siblings[targetIndex].sort_order;
     let newSortOrder: number;
     if (position === 'before') {
       newSortOrder =
@@ -355,8 +363,11 @@ export function DashboardListPage(): React.JSX.Element {
           : tgtOrder + 1;
     }
     try {
-      await dashboardAPI.update(srcId, { sortOrder: newSortOrder });
-      toast('顺序已更新', 'success');
+      await dashboardAPI.update(srcId, {
+        folderId: destFolderId,
+        sortOrder: newSortOrder,
+      });
+      toast((src.folder_id ?? null) !== (destFolderId ?? null) ? '移动成功' : '顺序已更新', 'success');
       await loadData();
     } catch {
       toast('排序失败', 'error');
@@ -365,7 +376,8 @@ export function DashboardListPage(): React.JSX.Element {
     }
   };
 
-  const handleFolderDragOver = (e: React.DragEvent, folderId: number) => {
+  /** 拖入文件夹高亮（文件夹自身排序时不占用） */
+  const handleFolderDragOverForDashboard = (e: React.DragEvent, folderId: number) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     setDropFolderId(folderId);
@@ -379,6 +391,9 @@ export function DashboardListPage(): React.JSX.Element {
 
   // Folder reorder drag handlers
   const handleFolderReorderDragStart = (e: React.DragEvent, folderId: number) => {
+    setDragDashboardId(null);
+    setDragDashboardReorderId(null);
+    setDropFolderId(null);
     setDragFolderId(folderId);
     e.dataTransfer.setData('application/folder-id', String(folderId));
     e.dataTransfer.effectAllowed = 'move';
@@ -395,6 +410,7 @@ export function DashboardListPage(): React.JSX.Element {
 
   const handleFolderReorderDrop = (e: React.DragEvent, targetFolderId: number, position: 'before' | 'after') => {
     e.preventDefault();
+    e.stopPropagation();
     const srcFolderId = parseInt(e.dataTransfer.getData('application/folder-id'));
     if (!srcFolderId || srcFolderId === targetFolderId) {
       setDragFolderId(null);
@@ -431,32 +447,86 @@ export function DashboardListPage(): React.JSX.Element {
     setDropPosition(null);
   };
 
-  const handleFolderDrop = (e: React.DragEvent, folderId: number) => {
-    e.preventDefault();
-    if (e.dataTransfer.getData('application/dashboard-reorder-id')) {
-      clearDashboardDragUi();
+  const handleFolderRowDrop = (e: React.DragEvent, folderId: number) => {
+    const folderReorderSrc = e.dataTransfer.getData('application/folder-id');
+    if (folderReorderSrc) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (dropPosition) {
+        handleFolderReorderDrop(e, folderId, dropPosition);
+      } else {
+        clearDashboardDragUi();
+      }
       return;
     }
-    const dashId = parseInt(e.dataTransfer.getData('application/dashboard-id'), 10);
-    if (dashId) {
-      handleMoveDashboard(dashId, folderId);
+
+    const reorderDashIdStr = e.dataTransfer.getData('application/dashboard-reorder-id');
+    if (reorderDashIdStr) {
+      e.preventDefault();
+      e.stopPropagation();
+      const reorderId = parseInt(reorderDashIdStr, 10);
+      if (!Number.isNaN(reorderId)) {
+        void (async () => {
+          try {
+            const others = dashboardsInFolder(folderId).filter(d => d.id !== reorderId);
+            const newSort =
+              others.length === 0 ? 0 : Math.max(...others.map(d => d.sort_order)) + 1;
+            await dashboardAPI.update(reorderId, { folderId, sortOrder: newSort });
+            toast('移动成功', 'success');
+            await loadData();
+          } catch {
+            toast('移动失败', 'error');
+          } finally {
+            clearDashboardDragUi();
+          }
+        })();
+      } else {
+        clearDashboardDragUi();
+      }
+      return;
     }
-    setDragDashboardId(null);
-    setDropFolderId(null);
+
+    e.preventDefault();
+    e.stopPropagation();
+    const dashId = parseInt(e.dataTransfer.getData('application/dashboard-id'), 10);
+    if (dashId) void handleMoveDashboard(dashId, folderId);
+    clearDashboardDragUi();
   };
 
   const handleRootDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    if (e.dataTransfer.getData('application/dashboard-reorder-id')) {
+    if (e.dataTransfer.getData('application/folder-id')) {
       clearDashboardDragUi();
       return;
     }
-    const dashId = parseInt(e.dataTransfer.getData('application/dashboard-id'), 10);
-    if (dashId) {
-      handleMoveDashboard(dashId, null);
+
+    const reorderDashIdStr = e.dataTransfer.getData('application/dashboard-reorder-id');
+    if (reorderDashIdStr) {
+      const reorderId = parseInt(reorderDashIdStr, 10);
+      if (!Number.isNaN(reorderId)) {
+        void (async () => {
+          try {
+            const others = dashboardsInFolder(null).filter(d => d.id !== reorderId);
+            const newSort =
+              others.length === 0 ? 0 : Math.max(...others.map(d => d.sort_order)) + 1;
+            await dashboardAPI.update(reorderId, { folderId: null, sortOrder: newSort });
+            toast('移动成功', 'success');
+            await loadData();
+          } catch {
+            toast('移动失败', 'error');
+          } finally {
+            clearDashboardDragUi();
+          }
+        })();
+      } else {
+        clearDashboardDragUi();
+      }
+      return;
     }
-    setDragDashboardId(null);
-    setDropFolderId(null);
+
+    const dashId = parseInt(e.dataTransfer.getData('application/dashboard-id'), 10);
+    if (dashId) void handleMoveDashboard(dashId, null);
+    clearDashboardDragUi();
   };
 
   const renderFolder = (node: FolderNode, depth: number = 0): React.ReactNode => {
@@ -464,35 +534,30 @@ export function DashboardListPage(): React.JSX.Element {
     const totalCount = countAllDashboards(node);
     const isDropTarget = dropTargetFolderId === node.id;
     const isDragSource = dragFolderId === node.id;
+    const isDropDashboardTarget =
+      (dragDashboardId != null || dragDashboardReorderId != null) && dropFolderId === node.id;
 
     return (
       <div key={node.id}>
         <div
-          className={`flex items-center gap-1 px-2 py-2 hover:bg-gray-50 cursor-pointer group ${isDropTarget ? (dropPosition === 'before' ? 'border-t-2 border-blue-400' : 'border-b-2 border-blue-400') : ''} ${isDragSource ? 'opacity-40' : ''} ${dropFolderId === node.id ? 'bg-blue-50 ring-1 ring-blue-300' : ''}`}
+          className={`flex items-center gap-1 px-2 py-2 hover:bg-gray-50 cursor-pointer group ${isDropTarget ? (dropPosition === 'before' ? 'border-t-2 border-blue-400' : 'border-b-2 border-blue-400') : ''} ${isDragSource ? 'opacity-40' : ''} ${isDropDashboardTarget ? 'bg-blue-50 ring-1 ring-blue-300' : ''}`}
           style={{ paddingLeft: `${depth * 16 + 8}px` }}
           onClick={() => toggleFolder(node.id)}
           onDragOver={e => {
-            handleFolderDragOver(e, node.id);
-            handleFolderReorderDragOver(e, node.id);
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (dragFolderId != null) {
+              handleFolderReorderDragOver(e, node.id);
+            } else if (dragDashboardId != null || dragDashboardReorderId != null) {
+              handleFolderDragOverForDashboard(e, node.id);
+            }
           }}
           onDragLeave={(e) => {
             handleFolderDragLeave(e);
             setDropTargetFolderId(null);
             setDropPosition(null);
           }}
-          onDrop={e => {
-            if (e.dataTransfer.getData('application/dashboard-reorder-id')) {
-              e.preventDefault();
-              clearDashboardDragUi();
-              return;
-            }
-            const folderId = e.dataTransfer.getData('application/folder-id');
-            if (folderId && dropPosition) {
-              handleFolderReorderDrop(e, node.id, dropPosition);
-            } else {
-              handleFolderDrop(e, node.id);
-            }
-          }}
+          onDrop={e => handleFolderRowDrop(e, node.id)}
         >
           <div
             className="shrink-0 cursor-grab"

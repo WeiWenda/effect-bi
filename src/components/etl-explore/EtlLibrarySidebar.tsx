@@ -385,33 +385,40 @@ export function EtlLibrarySidebar({
     }
     const src = tasks.find(t => t.name === srcName);
     const tgt = tasks.find(t => t.name === targetName);
-    if (!src || !tgt || (src.folder_id ?? null) !== (tgt.folder_id ?? null)) {
-      toast('请在同一目录内调整顺序', 'error');
+    if (!src || !tgt) {
       clearDragUi();
       return;
     }
+    const destFolderId = tgt.folder_id ?? null;
+    if ((folderContextId ?? null) !== (destFolderId ?? null)) {
+      clearDragUi();
+      return;
+    }
+
     const siblings = sortEtlTasks(
-      tasks.filter(t => (t.folder_id ?? null) === (folderContextId ?? null))
+      tasks.filter(t => (t.folder_id ?? null) === (destFolderId ?? null) && t.name !== srcName)
     );
-    const rest = siblings.filter(s => s.name !== srcName);
-    const ti = rest.findIndex(s => s.name === targetName);
+    const ti = siblings.findIndex(s => s.name === targetName);
     if (ti < 0) {
       clearDragUi();
       return;
     }
     const insertPos = position === 'before' ? ti : ti + 1;
-    const ordered = [...rest.slice(0, insertPos), src, ...rest.slice(insertPos)];
+    const ordered = [...siblings.slice(0, insertPos), src, ...siblings.slice(insertPos)];
     const updates = ordered
-      .map((t, idx) => ({ name: t.name, sortOrder: idx }))
-      .filter(({ name, sortOrder }) => {
-        const prev = tasks.find(x => x.name === name)?.folder_sort_order;
-        return Number(prev ?? 0) !== sortOrder;
+      .map((t, idx) => ({ name: t.name, sortOrder: idx, folderId: destFolderId }))
+      .filter(({ name, sortOrder, folderId }) => {
+        const prev = tasks.find(x => x.name === name);
+        if (!prev) return true;
+        const prevFolder = prev.folder_id ?? null;
+        const prevSort = Number(prev.folder_sort_order ?? 0);
+        return prevSort !== sortOrder || prevFolder !== (folderId ?? null);
       });
     try {
       for (const u of updates) {
         await etlAPI.patchTaskPlacement({
           name: u.name,
-          folderId: folderContextId,
+          folderId: u.folderId,
           sortOrder: u.sortOrder,
         });
       }
@@ -523,7 +530,7 @@ export function EtlLibrarySidebar({
     e.dataTransfer.dropEffect = 'move';
     if (dragFolderId != null) {
       handleFolderReorderDragOver(e, folderId);
-    } else if (dragTaskName != null) {
+    } else if (dragTaskName != null || dragTaskReorderName != null) {
       handleFolderDragOverForTask(e, folderId);
     }
   };
@@ -537,6 +544,7 @@ export function EtlLibrarySidebar({
     const folderReorderSrc = e.dataTransfer.getData('application/etl-folder-id');
     if (folderReorderSrc) {
       e.preventDefault();
+      e.stopPropagation();
       if (dropPosition) {
         handleFolderReorderDrop(e, folderId, dropPosition);
       } else {
@@ -544,12 +552,31 @@ export function EtlLibrarySidebar({
       }
       return;
     }
-    if (e.dataTransfer.getData('application/etl-task-reorder-name')) {
+    const reorderDropName = e.dataTransfer.getData('application/etl-task-reorder-name');
+    if (reorderDropName) {
       e.preventDefault();
-      clearDragUi();
+      e.stopPropagation();
+      void (async () => {
+        try {
+          const siblings = sortEtlTasks(
+            tasks.filter(t => (t.folder_id ?? null) === folderId && t.name !== reorderDropName)
+          );
+          await etlAPI.patchTaskPlacement({
+            name: reorderDropName,
+            folderId,
+            sortOrder: siblings.length,
+          });
+          await loadData();
+        } catch {
+          toast('移动失败', 'error');
+        } finally {
+          clearDragUi();
+        }
+      })();
       return;
     }
     e.preventDefault();
+    e.stopPropagation();
     const name = e.dataTransfer.getData('application/etl-task-name');
     if (name) void handleMoveTask(name, folderId);
     clearDragUi();
@@ -561,8 +588,25 @@ export function EtlLibrarySidebar({
       clearDragUi();
       return;
     }
-    if (e.dataTransfer.getData('application/etl-task-reorder-name')) {
-      clearDragUi();
+    const reorderRootName = e.dataTransfer.getData('application/etl-task-reorder-name');
+    if (reorderRootName) {
+      void (async () => {
+        try {
+          const siblings = sortEtlTasks(
+            tasks.filter(t => t.folder_id == null && t.name !== reorderRootName)
+          );
+          await etlAPI.patchTaskPlacement({
+            name: reorderRootName,
+            folderId: null,
+            sortOrder: siblings.length,
+          });
+          await loadData();
+        } catch {
+          toast('移动失败', 'error');
+        } finally {
+          clearDragUi();
+        }
+      })();
       return;
     }
     const name = e.dataTransfer.getData('application/etl-task-name');
@@ -703,7 +747,8 @@ export function EtlLibrarySidebar({
   const renderFolder = (node: FolderNode, depth: number = 0) => {
     const isExpanded = expandedFolders.has(node.id);
     const total = countTasksInFolder(node);
-    const isDropTaskTarget = dragTaskName != null && dropFolderId === node.id;
+    const isDropTaskTarget =
+      (dragTaskName != null || dragTaskReorderName != null) && dropFolderId === node.id;
     const isReorderTarget = dragFolderId != null && dropTargetFolderId === node.id;
     const isDragFolderSource = dragFolderId === node.id;
 

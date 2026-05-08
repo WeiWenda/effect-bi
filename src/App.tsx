@@ -2,13 +2,12 @@ import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom
 import Register from './components/Register';
 import Login from './components/Login';
 import Chat from './components/Chat';
-import Lineage from './components/Lineage';
+import { LineageLayout, LineageSearchPage, TableDetailPage } from './components/Lineage';
 import Dags from './components/Dags';
 import Cubes from './components/Cubes';
 import Query from './components/Query';
 import Dashboard from './components/Dashboard';
 import { ETL } from './components/ETL';
-import { TableDetailPage } from './components/lineage-explore/TableDetailPage';
 import Navbar from './components/Navbar';
 import { TooltipProvider } from './components/ui/tooltip';
 import { ToastProvider } from './components/ui/toast';
@@ -80,8 +79,10 @@ function App(): React.JSX.Element {
               }
             >
               <Route path="chat" element={<Chat />} />
-              <Route path="lineage" element={<Lineage />} />
-              <Route path="lineage/table/:tableName" element={<TableDetailPage />} />
+              <Route path="lineage" element={<LineageLayout />}>
+                <Route index element={<LineageSearchPage />} />
+                <Route path="table/:tableName" element={<TableDetailPage />} />
+              </Route>
               <Route path="dags" element={<Dags />} />
               <Route path="dags/:id" element={<Dags />} />
               <Route path="cube" element={<Cubes />} />

@@ -3,6 +3,19 @@ import { pool } from '../config/postgres.js';
 
 const router: Router = Router();
 
+/** 与 etl_folders 一致：拖拽小数 sort_order → INTEGER 槽位（2.5 → 3） */
+function dashboardFolderSortOrderSlot(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null;
+  const n =
+    typeof raw === 'number'
+      ? raw
+      : typeof raw === 'string' && String(raw).trim() !== ''
+        ? parseFloat(String(raw).trim())
+        : NaN;
+  if (!Number.isFinite(n)) return null;
+  return Number.isInteger(n) ? n : Math.ceil(n);
+}
+
 // ─── Folder APIs ───
 
 /**
@@ -33,14 +46,39 @@ router.post('/folders', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const result = await pool.query(
-      `INSERT INTO dashboard_folders (name, parent_id, sort_order)
-       VALUES ($1, $2, $3)
-       RETURNING id, name, parent_id, sort_order, created_at, updated_at`,
-      [name, parentId || null, sortOrder || 0]
-    );
+    const parent = parentId == null || parentId === '' ? null : parentId;
+    const posRaw = sortOrder !== undefined && sortOrder !== null ? sortOrder : 0;
+    const pos =
+      typeof posRaw === 'number' && !Number.isNaN(posRaw)
+        ? Math.trunc(posRaw)
+        : typeof posRaw === 'string' && String(posRaw).trim() !== ''
+          ? parseInt(String(posRaw), 10)
+          : 0;
+    const insertSort = Number.isFinite(pos) ? pos : 0;
 
-    res.status(201).json({ folder: result.rows[0] });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE dashboard_folders
+         SET sort_order = sort_order + 1
+         WHERE parent_id IS NOT DISTINCT FROM $1 AND sort_order >= $2`,
+        [parent, insertSort]
+      );
+      const result = await client.query(
+        `INSERT INTO dashboard_folders (name, parent_id, sort_order)
+         VALUES ($1, $2, $3)
+         RETURNING id, name, parent_id, sort_order, created_at, updated_at`,
+        [name, parent, insertSort]
+      );
+      await client.query('COMMIT');
+      res.status(201).json({ folder: result.rows[0] });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     console.error('Error creating folder:', error);
     res.status(500).json({ error: 'Failed to create folder' });
@@ -54,11 +92,67 @@ router.post('/folders', async (req: Request, res: Response): Promise<void> => {
 router.put('/folders/:id', async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { name, parentId, sortOrder } = req.body;
+    const folderId = parseInt(String(id), 10);
+    if (Number.isNaN(folderId)) {
+      res.status(400).json({ error: 'Invalid id' });
+      return;
+    }
+    const { name, parentId, sortOrder } = req.body || {};
 
-    const existing = await pool.query('SELECT id FROM dashboard_folders WHERE id = $1', [id]);
+    const existing = await pool.query(
+      'SELECT id, name, parent_id, sort_order FROM dashboard_folders WHERE id = $1',
+      [folderId]
+    );
     if (existing.rows.length === 0) {
       res.status(404).json({ error: 'Folder not found' });
+      return;
+    }
+    const row = existing.rows[0] as { name: string; parent_id: number | null; sort_order: number };
+
+    const wantsReorder =
+      'sortOrder' in (req.body || {}) &&
+      sortOrder !== undefined &&
+      sortOrder !== null &&
+      String(sortOrder).trim() !== '';
+    const slot = wantsReorder ? dashboardFolderSortOrderSlot(sortOrder) : null;
+    if (wantsReorder && slot === null) {
+      res.status(400).json({ error: 'Invalid sortOrder' });
+      return;
+    }
+
+    const mergedName = name !== undefined ? name : row.name;
+    const mergedParent =
+      parentId !== undefined ? (parentId === null || parentId === '' ? null : parentId) : row.parent_id;
+
+    const effectiveParent = parentId !== undefined ? mergedParent : row.parent_id;
+
+    if (slot !== null) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `UPDATE dashboard_folders
+           SET sort_order = sort_order + 1
+           WHERE parent_id IS NOT DISTINCT FROM $1 AND id <> $2 AND sort_order >= $3`,
+          [effectiveParent, folderId, slot]
+        );
+        const result = await client.query(
+          `UPDATE dashboard_folders SET
+            name = $1,
+            parent_id = $2,
+            sort_order = $3
+           WHERE id = $4
+           RETURNING id, name, parent_id, sort_order, created_at, updated_at`,
+          [mergedName, mergedParent, slot, folderId]
+        );
+        await client.query('COMMIT');
+        res.json({ folder: result.rows[0] });
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
       return;
     }
 
@@ -69,7 +163,7 @@ router.put('/folders/:id', async (req: Request, res: Response): Promise<void> =>
         sort_order = COALESCE($3, sort_order)
        WHERE id = $4
        RETURNING id, name, parent_id, sort_order, created_at, updated_at`,
-      [name || null, parentId !== undefined ? parentId : null, sortOrder !== undefined ? sortOrder : null, id]
+      [name !== undefined ? name : null, parentId !== undefined ? parentId : null, sortOrder !== undefined ? sortOrder : null, folderId]
     );
 
     res.json({ folder: result.rows[0] });

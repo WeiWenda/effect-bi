@@ -1,7 +1,10 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
-import { FlaskConicalIcon, Loader2Icon, History } from 'lucide-react';
-import { etlAPI, type EtlTaskVersion } from '../../services/etlApi';
+import { CheckIcon, FlaskConicalIcon, History, Loader2Icon, PencilIcon, XIcon } from 'lucide-react';
+import { isAxiosError } from 'axios';
+import { etlAPI, type EtlTaskVersion, type EtlTaskOutput } from '../../services/etlApi';
+import { lineageEntityRouteTableName } from '../../services/lineageNodeMeta';
 import type { EtlTaskDevTabPersistedBody } from '../../utils/etlWorkspaceStorage';
 import { useToast } from '../ui/toast';
 import { Button } from '../ui/button';
@@ -35,17 +38,49 @@ interface EtlTaskDevTabProps {
   body: EtlTaskDevTabPersistedBody;
   onBodyChange: (next: EtlTaskDevTabPersistedBody) => void;
   onTaskSaved?: () => void;
+  /** 任务逻辑名或产出表在「基本信息」中保存到 PG 后回调（用于更新标签标题等） */
+  onTaskIdentitySaved?: (payload: { previousName: string; nextName: string }) => void;
 }
 
-export function EtlTaskDevTab({ body, onBodyChange, onTaskSaved }: EtlTaskDevTabProps): React.JSX.Element {
+function taskOutputQualifiedDot(taskOutput: EtlTaskOutput): string {
+  return [taskOutput.catalogName, taskOutput.databaseName, taskOutput.tableName]
+    .map(s => (typeof s === 'string' ? s.trim() : ''))
+    .filter(Boolean)
+    .join('.');
+}
+
+function lineageTableDetailPath(taskOutput: EtlTaskOutput): string | null {
+  const catalog = typeof taskOutput.catalogName === 'string' ? taskOutput.catalogName.trim() : '';
+  const database = typeof taskOutput.databaseName === 'string' ? taskOutput.databaseName.trim() : '';
+  const table = typeof taskOutput.tableName === 'string' ? taskOutput.tableName.trim() : '';
+  if (!table) return null;
+  const key = lineageEntityRouteTableName({
+    table_name: table,
+    catalog_name: catalog,
+    database_name: database,
+  });
+  if (!key) return null;
+  return `/lineage/table/${encodeURIComponent(key)}?tab=fields`;
+}
+
+export function EtlTaskDevTab({
+  body,
+  onBodyChange,
+  onTaskSaved,
+  onTaskIdentitySaved,
+}: EtlTaskDevTabProps): React.JSX.Element {
   const { toast } = useToast();
-  const taskNameRef = useRef(body.taskName);
-  const pendingTaskOutputRef = useRef<{ catalogName: string; databaseName: string; tableName: string } | null>(null);
-  const saveOutputTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  taskNameRef.current = body.taskName;
+  const identityFromNameRef = useRef('');
 
   const [dryRunning, setDryRunning] = useState(false);
-  const [savingTaskOutput, setSavingTaskOutput] = useState(false);
+  const [basicInfoEditing, setBasicInfoEditing] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [draftTaskName, setDraftTaskName] = useState('');
+  const [draftTaskOutput, setDraftTaskOutput] = useState<EtlTaskOutput>({
+    catalogName: '',
+    databaseName: '',
+    tableName: '',
+  });
   const [versionDialogOpen, setVersionDialogOpen] = useState(false);
   const [runtimeDepsModalOpen, setRuntimeDepsModalOpen] = useState(false);
   const [qualityRulesModalOpen, setQualityRulesModalOpen] = useState(false);
@@ -82,30 +117,70 @@ export function EtlTaskDevTab({ body, onBodyChange, onTaskSaved }: EtlTaskDevTab
     onBodyChange({ ...body, ...partial, kind: 'task-dev' });
   };
 
-  const schedulePersistTaskOutput = useCallback(
-    (out: { catalogName: string; databaseName: string; tableName: string }) => {
-      pendingTaskOutputRef.current = out;
-      if (saveOutputTimerRef.current) clearTimeout(saveOutputTimerRef.current);
-      saveOutputTimerRef.current = setTimeout(() => {
-        saveOutputTimerRef.current = null;
-        const name = taskNameRef.current.trim();
-        const payload = pendingTaskOutputRef.current;
-        if (!name || !payload) return;
-        setSavingTaskOutput(true);
-        void etlAPI
-          .patchTaskOutput(name, payload)
-          .catch(() => toast('产出表保存失败', 'error'))
-          .finally(() => setSavingTaskOutput(false));
-      }, 400);
-    },
-    [toast]
-  );
+  const beginEditBasicInfo = () => {
+    identityFromNameRef.current = body.taskName.trim();
+    setDraftTaskName(body.taskName);
+    setDraftTaskOutput({
+      catalogName: body.taskOutput.catalogName,
+      databaseName: body.taskOutput.databaseName,
+      tableName: body.taskOutput.tableName,
+    });
+    setBasicInfoEditing(true);
+  };
 
-  useEffect(() => {
-    return () => {
-      if (saveOutputTimerRef.current) clearTimeout(saveOutputTimerRef.current);
-    };
-  }, []);
+  const cancelEditBasicInfo = () => {
+    setBasicInfoEditing(false);
+  };
+
+  const handleSaveBasicInfo = async () => {
+    const from = identityFromNameRef.current.trim();
+    const nextName = draftTaskName.trim();
+    if (!nextName) {
+      toast('请输入任务名称', 'error');
+      return;
+    }
+    if (!from) {
+      toast('请先从左侧打开已有任务或使用「新增 ETL」创建任务后再保存基本信息', 'error');
+      return;
+    }
+    setSavingProfile(true);
+    try {
+      const { name, taskOutput } = await etlAPI.patchTaskProfile({
+        fromName: from,
+        name: nextName,
+        taskOutput: {
+          catalogName: draftTaskOutput.catalogName.trim(),
+          databaseName: draftTaskOutput.databaseName.trim(),
+          tableName: draftTaskOutput.tableName.trim(),
+        },
+      });
+      patch({
+        taskName: name,
+        taskOutput: {
+          catalogName: taskOutput.catalogName,
+          databaseName: taskOutput.databaseName,
+          tableName: taskOutput.tableName,
+        },
+      });
+      onTaskIdentitySaved?.({ previousName: from, nextName: name.trim() });
+      toast('基本信息已保存', 'success');
+      setBasicInfoEditing(false);
+    } catch (e) {
+      if (isAxiosError(e) && e.response?.status === 409) {
+        toast('任务名称已存在', 'error');
+        return;
+      }
+      const msg =
+        isAxiosError(e) &&
+        e.response?.data &&
+        typeof (e.response.data as { error?: string }).error === 'string'
+          ? (e.response.data as { error: string }).error
+          : '保存失败';
+      toast(msg, 'error');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
 
   const getDraft = useCallback(
     () => ({
@@ -247,63 +322,120 @@ export function EtlTaskDevTab({ body, onBodyChange, onTaskSaved }: EtlTaskDevTab
       />
 
       <div className="shrink-0 border-b border-gray-200 bg-white px-3 py-2">
-        <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
-          <div className="flex flex-col gap-1">
-            <span className="flex h-[14px] items-end text-[10px] font-medium leading-none text-gray-500">任务类型</span>
-            <span className="inline-flex h-8 min-h-8 items-center rounded-md border border-gray-200 bg-gray-50 px-2 text-xs font-medium text-gray-800 box-border">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+            {basicInfoEditing ? (
+              <input
+                className="h-8 min-w-[8rem] max-w-[18rem] shrink rounded border border-gray-200 px-2 text-sm font-semibold text-gray-800 placeholder:text-gray-400"
+                value={draftTaskName}
+                onChange={e => setDraftTaskName(e.target.value)}
+                placeholder="logical_dag_name"
+              />
+            ) : (
+              <span
+                className="max-w-[18rem] shrink-0 truncate text-sm font-bold text-gray-900"
+                title={body.taskName.trim() || '（未命名）'}
+              >
+                {body.taskName.trim() || '（未命名）'}
+              </span>
+            )}
+            <span className="inline-flex h-7 shrink-0 items-center rounded border border-gray-200 bg-gray-50 px-2 text-xs font-medium text-gray-800">
               HSQL
             </span>
-          </div>
-          <label className="flex flex-col gap-1 shrink-0">
-            <span className="flex h-[14px] items-end text-[10px] font-medium leading-none text-gray-500">任务名称</span>
-            <input
-              className="h-8 min-h-8 box-border w-44 rounded-md border border-gray-200 px-2 text-xs leading-none text-gray-800 placeholder:text-gray-400"
-              value={body.taskName}
-              onChange={e => patch({ taskName: e.target.value })}
-              placeholder="logical_dag_name"
-            />
-          </label>
-          <div className="flex min-w-0 flex-1 basis-[min(100%,36rem)] flex-col gap-1">
-            <div className="flex h-[14px] items-center gap-2">
-              <span className="text-[10px] font-medium leading-none text-gray-500">产出表</span>
-              {savingTaskOutput ? <Loader2Icon className="size-3 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
-            </div>
-            <GravitinoTripleSelect
-              variant="inlineRow"
-              enabled
-              value={{
-                catalog: body.taskOutput.catalogName,
-                database: body.taskOutput.databaseName,
-                table: body.taskOutput.tableName,
-              }}
-              onChange={t => {
-                const next = {
-                  catalogName: t.catalog,
-                  databaseName: t.database,
-                  tableName: t.table,
-                };
-                patch({ taskOutput: next });
-                schedulePersistTaskOutput(next);
-              }}
-            />
-          </div>
-          <div className="ml-auto flex shrink-0 flex-col gap-1">
-            <span className="h-[14px] shrink-0" aria-hidden />
-            <div className="flex h-8 min-h-8 items-center gap-2">
+            <span className="shrink-0 text-gray-500">产出表:</span>
+            {basicInfoEditing ? (
+              <div className="min-w-0 flex-1 basis-full sm:basis-auto">
+                <GravitinoTripleSelect
+                  variant="inlineRow"
+                  enabled
+                  value={{
+                    catalog: draftTaskOutput.catalogName,
+                    database: draftTaskOutput.databaseName,
+                    table: draftTaskOutput.tableName,
+                  }}
+                  onChange={t =>
+                    setDraftTaskOutput({
+                      catalogName: t.catalog,
+                      databaseName: t.database,
+                      tableName: t.table,
+                    })
+                  }
+                />
+              </div>
+            ) : (
+              <span className="min-w-0 font-mono text-gray-800 break-all">
+                {(() => {
+                  const q = taskOutputQualifiedDot(body.taskOutput);
+                  const path = lineageTableDetailPath(body.taskOutput);
+                  if (!q) {
+                    return <span className="text-gray-400">未配置</span>;
+                  }
+                  if (path) {
+                    return (
+                      <Link
+                        to={path}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 underline-offset-2 hover:underline"
+                        title="在新标签页打开表元数据详情"
+                      >
+                        {q}
+                      </Link>
+                    );
+                  }
+                  return q;
+                })()}
+              </span>
+            )}
+            {!basicInfoEditing ? (
               <button
                 type="button"
-                onClick={() => void handleDryRun()}
-                disabled={dryRunning}
-                className="inline-flex h-8 min-h-8 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 box-border"
+                onClick={beginEditBasicInfo}
+                className="ml-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-gray-600 hover:bg-gray-100"
+                title="编辑"
+                aria-label="编辑"
               >
-                {dryRunning ? <Loader2Icon className="size-3.5 animate-spin" /> : <FlaskConicalIcon className="size-3.5" />}
-                试运行
+                <PencilIcon className="size-4" />
               </button>
-              <Button type="button" size="sm" variant="outline" className="h-8 min-h-8 shrink-0 px-3 text-xs" onClick={() => setVersionDialogOpen(true)}>
-                <History className="size-3.5 mr-1.5" />
-                版本管理
-              </Button>
-            </div>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveBasicInfo()}
+                  disabled={savingProfile}
+                  className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100 disabled:opacity-50"
+                  title="保存"
+                  aria-label="保存"
+                >
+                  {savingProfile ? <Loader2Icon className="size-3.5 animate-spin" /> : <CheckIcon className="size-3.5" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelEditBasicInfo}
+                  disabled={savingProfile}
+                  className="inline-flex size-7 shrink-0 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                  title="取消"
+                  aria-label="取消"
+                >
+                  <XIcon className="size-3.5" />
+                </button>
+              </>
+            )}
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleDryRun()}
+              disabled={dryRunning}
+              className="inline-flex h-8 min-h-8 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 box-border"
+            >
+              {dryRunning ? <Loader2Icon className="size-3.5 animate-spin" /> : <FlaskConicalIcon className="size-3.5" />}
+              试运行
+            </button>
+            <Button type="button" size="sm" variant="outline" className="h-8 min-h-8 shrink-0 px-3 text-xs" onClick={() => setVersionDialogOpen(true)}>
+              <History className="size-3.5 mr-1.5" />
+              版本管理
+            </Button>
           </div>
         </div>
       </div>

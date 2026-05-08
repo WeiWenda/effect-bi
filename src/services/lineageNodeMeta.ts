@@ -32,6 +32,17 @@ export function lineageEntityRouteTableName(properties: Record<string, unknown>)
 }
 
 /** Gravitino / 产出明细共用：catalog → database(schema) → table */
+/** Neo4j 表节点上的 `etl_task_id`，与 `etl_task_info.id` 一致（发布后写入）。 */
+export function lineageEtlTaskInfoId(properties: Record<string, unknown>): number | null {
+  const raw = properties.etl_task_id;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.floor(raw);
+  if (typeof raw === 'string') {
+    const n = parseInt(raw.trim(), 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 export function lineageTableGravitinoLocation(
   properties: Record<string, unknown>
 ): { catalog: string; database: string; table: string } | null {

@@ -1,38 +1,64 @@
 # Effect BI · 数据工作台
 
-面向分析型数据栈的一体化前端：**对话（LangGraph）**、**血缘（Neo4j）**、**Cube 语义层**、**可视化查询与看板**、**ETL / Airflow** 等，由 **React + Vite** 与 `**backend/node`（Express）** 承载主 API；`**backend/langgraph`** 为独立 FastAPI 子模块（Git submodule）。产品与技术说明见 **[docs/README.md](docs/README.md)**。
+面向分析型数据栈的一体化前端：**对话（LangGraph）**、**血缘（Neo4j）**、**Cube 语义层**、**可视化查询与看板**、**ETL / Airflow** 等，由 **React + Vite** 与 **`backend/node`（Express）** 承载主 API；**`backend/langgraph`** 为独立 FastAPI 子模块（Git submodule）。产品与技术说明见 **[docs/README.md](docs/README.md)**。
 
-## 报表开发推荐流程
+## 平台使用指南
 
-典型顺序：**数据就绪 → 语义层建模与发布 → 可视化查询出图 → 看板沉淀与筛选**。血缘（`/lineage`）可在建模前后用于理解表依赖；ETL（`/etl`）与调度用于持续产出数据。查询/看板产品细节见 **[docs/README.md](docs/README.md)** 与 `docs/visual-query-and-dashboard-design.md` 等。
+报表开发典型流程：**数据转换 → 指标语义层建模 → 可视化查询出图 → 看板配置**
 
-```mermaid
-flowchart TB
-  subgraph prep["1 · 数据与任务（按需）"]
-    A["表 / 分区就绪 · ETL、Ad-hoc、Airflow 等 · /etl"]
-  end
+### 1 · 数据与任务（`/etl`）
 
-  subgraph sem["2 · 语义层"]
-    B["Cube 画布建模 · /cube"]
-    C["发布动态模型（可版本化回滚）"]
-  end
+![ETL：任务开发、依赖与调度相关能力](public/etl.png)
 
-  subgraph rpt["3 · 报表与看板"]
-    D["可视化查询 · /query"]
-    E["选 Cube View · 配维度 / 指标 · 出图"]
-    F["看板 · /dashboard"]
-    G["Pin 图表 · 布局 · 看板级筛选 · 动态过滤 / 下钻（可选）"]
-  end
+在 ETL 模块维护任务与版本、配置运行依赖（上游表 / 分区），并与调度侧衔接，保证报表所需表与分区持续就绪。
 
-  A --> B
-  B --> C
-  C --> D
-  D --> E
-  E --> F
-  F --> G
-```
+![Ad-hoc：页内 SQL 调试与结果回溯](public/adhoc.png)
 
+同一模块内可使用 **Ad-hoc** 对 Gravitino 目录下的表做即席查询，便于加工或排查数据后再进入语义层。
 
+### 2 · 指标语义层建模（`/cube`）
+
+![Cube：画布建模与动态模型发布](public/cube.png)
+
+在 Cube 画布中拖拽事实 / 维度表、声明度量与维度，发布为可供查询页消费的 **Cube View**（支持版本化与回滚）。
+
+### 3 · 可视化查询（`/query`）
+
+![可视化查询：选择 View、维度 / 指标与图表类型](public/query.png)
+
+选择已发布的 View，配置维度、指标、过滤与排序，即时出图；满意后可 **Pin** 到看板。
+
+### 4 · 看板（`/dashboard`）
+
+![看板：左侧文件夹树与看板列表](public/dashboard-tree.png)
+
+进入 **`/dashboard`** 列表视图时，左侧为 **文件夹树**：可按目录收纳看板，支持展开 / 折叠、拖拽调整文件夹顺序，以及将看板拖入文件夹或根目录以整理结构（与标题拖拽移动目录的行为一致）。
+
+![看板：图表布局与看板级筛选](public/dashboard.png)
+
+打开某一看板后，阅览 Pin 下的图表，使用看板级筛选；图表侧还可按需启用动态过滤、维度下钻等能力。
+
+![看板：编辑模式下的布局与图表配置](public/dashboard-config.png)
+
+在看板编辑模式下调整网格布局、标签页与单个图表占位，完成后再保存以便阅览端使用统一的筛选与下钻体验。
+
+### （可选）血缘（`/lineage`）
+
+![血缘：表依赖与上下游理解](public/lineage.png)
+
+建模或排障时打开血缘，确认报表依赖的表、任务产出关系，再调整 ETL 或语义层。
+
+### （可选）链路治理（`/dags`）
+
+![链路治理：DAG 与运行态一览](public/monitor.png)
+
+在**报表补数**、**产出延迟**或**产出失败**等场景下，结合调度侧视图排查链路：确认相关 DAG / 任务是否已触发、运行是否成功、是否存在依赖未就绪或重试滞后，从而定位是上游数据、调度窗口还是任务本身的问题。
+
+### （可选）对话（`/chat`）
+
+![对话：LangGraph 驱动的助手界面](public/chat.png)
+
+该模块作为**预留入口**：后续可在此基础上扩展 **AI 查数**（自然语言对接语义层 / 查询）、**AI 数据开发**（辅助 SQL、ETL 与建模说明）、**AI 分析**（解读图表与指标）等能力；当前实现以对话框架与路由占位为主，具体能力与产品范围以版本说明为准。
 
 ## 架构概览
 

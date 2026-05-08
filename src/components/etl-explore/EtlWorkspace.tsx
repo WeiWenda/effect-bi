@@ -696,6 +696,12 @@ export function EtlWorkspace(): React.JSX.Element {
               body={taskBodyForActive}
               onBodyChange={b => setTabBodies(prev => ({ ...prev, [activeTab.id]: b }))}
               onTaskSaved={bumpLibraryRefresh}
+              onTaskIdentitySaved={({ nextName }) => {
+                bumpLibraryRefresh();
+                setTabs(prev =>
+                  prev.map(t => (t.id === activeTab.id && t.kind === 'task-dev' ? { ...t, title: nextName } : t))
+                );
+              }}
             />
           ) : (
             <EtlAdhocTab

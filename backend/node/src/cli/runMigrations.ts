@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import { pool } from './config/postgres.js';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { pool } from '../config/postgres.js';
 
-/** Ordered list — keep in sync with `scripts/run-migration.ts` comments / history. */
+/** Ordered list of SQL files under `migrations/` (add new DDL here). */
 export const NODE_PG_MIGRATION_FILES: readonly string[] = [
   'create_dag_views.sql',
   'create_etl_task_info.sql',
@@ -23,11 +23,12 @@ export const NODE_PG_MIGRATION_FILES: readonly string[] = [
 
 /**
  * Apply SQL files under `backend/node/migrations` (idempotent-friendly DDL where possible).
- * Call from CLI (`migrate.ts`) or tooling; ends the pool when finished.
+ * Run as CLI: `tsx src/cli/runMigrations.ts` / `node dist/cli/runMigrations.js`.
+ * Import `runMigrations` from elsewhere for tooling; ends the pool when finished.
  */
 export async function runMigrations(): Promise<void> {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const migrationsDir = path.join(here, '../migrations');
+  const migrationsDir = path.join(here, '../../migrations');
 
   const client = await pool.connect();
   try {
@@ -42,4 +43,15 @@ export async function runMigrations(): Promise<void> {
     client.release();
     await pool.end();
   }
+}
+
+const isMainCli =
+  typeof process.argv[1] === 'string' &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (isMainCli) {
+  runMigrations().catch((error: unknown) => {
+    console.error(error);
+    process.exit(1);
+  });
 }

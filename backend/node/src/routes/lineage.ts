@@ -31,6 +31,34 @@ interface Neo4jPath {
   length: number;
 }
 
+/** Neo4j driver 对整型返回 Integer（含 low/high）；JSON 序列化需转为普通 number */
+function serializeNeo4jValue(v: unknown): unknown {
+  if (v === null || v === undefined) return v;
+  if (neo4j.isInt(v as object)) {
+    return (v as { toNumber: () => number }).toNumber();
+  }
+  if (Array.isArray(v)) {
+    return v.map(serializeNeo4jValue);
+  }
+  if (typeof v === 'object' && v !== null && Object.getPrototypeOf(v) === Object.prototype) {
+    const o: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v)) {
+      o[k] = serializeNeo4jValue(val);
+    }
+    return o;
+  }
+  return v;
+}
+
+function serializeNeo4jProperties(props: Record<string, unknown> | undefined | null): Record<string, unknown> {
+  if (!props) return {};
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(props)) {
+    out[k] = serializeNeo4jValue(props[k]);
+  }
+  return out;
+}
+
 /**
  * Convert Neo4j Path object to standardized Path format
  */
@@ -54,7 +82,7 @@ function convertNeo4jPathToPath(path: Neo4jPath | null): Path {
       nodes.push({
         id: startNodeId,
         labels: path.start.labels,
-        properties: path.start.properties
+        properties: serializeNeo4jProperties(path.start.properties)
       });
       nodeIds.add(startNodeId);
     }
@@ -67,7 +95,7 @@ function convertNeo4jPathToPath(path: Neo4jPath | null): Path {
       nodes.push({
         id: endNodeId,
         labels: path.end.labels,
-        properties: path.end.properties
+        properties: serializeNeo4jProperties(path.end.properties)
       });
       nodeIds.add(endNodeId);
     }
@@ -87,7 +115,7 @@ function convertNeo4jPathToPath(path: Neo4jPath | null): Path {
           relationships.push({
             id: r.elementId ?? `${startNodeId}-${endNodeId}`,
             type: r.type,
-            properties: r.properties ?? {},
+            properties: serializeNeo4jProperties(r.properties ?? {}),
             startNodeId,
             endNodeId,
           });
@@ -101,7 +129,7 @@ function convertNeo4jPathToPath(path: Neo4jPath | null): Path {
           nodes.push({
             id: nodeId,
             labels: segment.start.labels,
-            properties: segment.start.properties
+            properties: serializeNeo4jProperties(segment.start.properties)
           });
           nodeIds.add(nodeId);
         }
@@ -114,7 +142,7 @@ function convertNeo4jPathToPath(path: Neo4jPath | null): Path {
           nodes.push({
             id: nodeId,
             labels: segment.end.labels,
-            properties: segment.end.properties
+            properties: serializeNeo4jProperties(segment.end.properties)
           });
           nodeIds.add(nodeId);
         }
@@ -150,7 +178,7 @@ router.get('/top', async (req: Request, res: Response): Promise<void> => {
       return {
         id: node.elementId,
         labels: node.labels,
-        properties: node.properties,
+        properties: serializeNeo4jProperties(node.properties),
         degree: record.get('degree').toNumber()
       };
     });
@@ -197,7 +225,7 @@ router.get('/entity', async (req: Request, res: Response): Promise<void> => {
     const entity = {
       id: node.elementId,
       labels: node.labels,
-      properties: node.properties
+      properties: serializeNeo4jProperties(node.properties)
     };
     
     await session.close();
@@ -206,6 +234,38 @@ router.get('/entity', async (req: Request, res: Response): Promise<void> => {
   } catch (error) {
     console.error('Error getting entity by table name:', error);
     res.status(500).json({ error: 'Failed to get entity' });
+  }
+});
+
+/**
+ * 表血缘目录：Neo4j `:Table` 按 catalog_name → database_name → table_name 去重枚举（供前端树）
+ * GET /api/lineage/tables/tree
+ */
+router.get('/tables/tree', async (_req: Request, res: Response): Promise<void> => {
+  const session = getSession();
+  try {
+    const query = `
+      MATCH (n:Table)
+      WHERE coalesce(toString(n.catalog_name), '') <> ''
+        AND coalesce(toString(n.database_name), '') <> ''
+        AND coalesce(toString(n.table_name), '') <> ''
+      RETURN DISTINCT toString(n.catalog_name) AS catalog,
+                      toString(n.database_name) AS database,
+                      toString(n.table_name) AS table_name
+      ORDER BY catalog, database, table_name
+    `;
+    const result = await session.run(query);
+    const rows = result.records.map((record: { get: (k: string) => unknown }) => ({
+      catalog: String(record.get('catalog')),
+      database: String(record.get('database')),
+      tableName: String(record.get('table_name')),
+    }));
+    res.json({ rows });
+  } catch (error) {
+    console.error('Error listing lineage tables tree index:', error);
+    res.status(500).json({ error: 'Failed to list tables' });
+  } finally {
+    await session.close();
   }
 });
 
@@ -237,7 +297,7 @@ router.get('/search', async (req: Request, res: Response): Promise<void> => {
       return {
         id: node.elementId,
         labels: node.labels,
-        properties: node.properties
+        properties: serializeNeo4jProperties(node.properties)
       };
     });
     
@@ -388,7 +448,7 @@ router.get('/dag/:dagId', async (req: Request, res: Response): Promise<void> => 
         nodesMap.set(startNodeId, {
           id: startNodeId,
           labels: startNode.labels,
-          properties: startNode.properties
+          properties: serializeNeo4jProperties(startNode.properties)
         });
       }
 
@@ -398,7 +458,7 @@ router.get('/dag/:dagId', async (req: Request, res: Response): Promise<void> => 
         nodesMap.set(endNodeId, {
           id: endNodeId,
           labels: endNode.labels,
-          properties: endNode.properties
+          properties: serializeNeo4jProperties(endNode.properties)
         });
       }
 
@@ -407,7 +467,7 @@ router.get('/dag/:dagId', async (req: Request, res: Response): Promise<void> => 
       relationships.push({
         id: relationship.elementId,
         type: relationship.type,
-        properties: relationship.properties ?? {},
+        properties: serializeNeo4jProperties(relationship.properties ?? {}),
         startNodeId: rs,
         endNodeId: re,
       });

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
-import { SaveIcon, UploadIcon, Loader2Icon, Trash2Icon } from 'lucide-react';
+import { SaveIcon, UploadIcon, Loader2Icon, Trash2Icon, ExternalLinkIcon } from 'lucide-react';
 import { useToast } from '../ui/toast';
 import { etlAPI, type EtlTaskVersion } from '../../services/etlApi';
 import { parseRuntimeDepsObjectFromJsonText } from '../../utils/etlRuntimeDeps';
@@ -197,6 +197,22 @@ export function EtlTaskVersionManageDialog({
     return r || `版本 #${v.id}`;
   };
 
+  const airflowPublishedDagHref = (etlTaskInfoId: number) => {
+    const base =
+      (import.meta.env.VITE_AIRFLOW_UI_BASE_URL as string | undefined)?.replace(/\/$/, '') ||
+      'http://localhost:8080';
+    return `${base}/dags/${encodeURIComponent(`auto_generate_${etlTaskInfoId}`)}`;
+  };
+
+  const openAirflowDagForVersion = (v: EtlTaskVersion) => {
+    const id = v.etlTaskInfoId;
+    if (typeof id !== 'number' || Number.isNaN(id)) {
+      toast('无法解析 Airflow 任务标识', 'error');
+      return;
+    }
+    window.open(airflowPublishedDagHref(id), '_blank', 'noopener,noreferrer');
+  };
+
   return (
     <Dialog open={open} onOpenChange={v => !v && onClose()}>
       <DialogContent className="max-w-2xl max-h-[80vh]">
@@ -272,7 +288,7 @@ export function EtlTaskVersionManageDialog({
                           type="button"
                           onClick={() => void handlePublish(v.id)}
                           disabled={publishingId === v.id}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-green-50 text-green-600 hover:bg-green-100 transition-colors disabled:opacity-50"
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-sky-50 text-sky-700 hover:bg-sky-100 transition-colors disabled:opacity-50"
                         >
                           {publishingId === v.id ? (
                             <Loader2Icon className="size-3 animate-spin" />
@@ -280,6 +296,16 @@ export function EtlTaskVersionManageDialog({
                             <UploadIcon className="size-3" />
                           )}
                           发布
+                        </button>
+                      )}
+                      {v.isPublished && (
+                        <button
+                          type="button"
+                          onClick={() => openAirflowDagForVersion(v)}
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-sky-50 text-sky-700 hover:bg-sky-100 transition-colors"
+                        >
+                          <ExternalLinkIcon className="size-3" />
+                          查看任务
                         </button>
                       )}
                       <button

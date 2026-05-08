@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ArrowLeftIcon, ExternalLinkIcon, Network as NetworkIcon } from 'lucide-react';
+import { ChevronLeftIcon, ExternalLinkIcon, Network as NetworkIcon } from 'lucide-react';
 import {
   ReactFlow,
   Node,
@@ -375,23 +375,25 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
-      {/* Header with back button */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center gap-4 shrink-0">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-2 text-gray-600 hover:text-gray-800 transition-colors"
-        >
-          <ArrowLeftIcon className="size-5" />
-          <span className="text-sm">返回列表</span>
-        </button>
-        {dagView && (
-          <div className="flex items-center gap-2 text-sm">
-            <NetworkIcon className="size-4 text-blue-600" />
-            <span className="font-medium text-gray-800">{dagView.name}</span>
-            <span className="text-gray-500">|</span>
-            <span className="text-gray-600">{dagView.nodeIds.length} 个节点</span>
-          </div>
-        )}
+      {/* 顶栏与 Cube 详情一致：Chevron + 图标 + 标题 + 辅文 */}
+      <div className="flex shrink-0 items-center border-b border-gray-200 bg-white px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={onBack}
+            className="rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+            title="返回列表"
+          >
+            <ChevronLeftIcon className="size-5" />
+          </button>
+          {dagView && (
+            <>
+              <NetworkIcon className="size-5 shrink-0 text-blue-600" aria-hidden />
+              <h1 className="truncate text-lg font-semibold text-gray-800">{dagView.name}</h1>
+              <span className="shrink-0 text-xs tabular-nums text-gray-500">{dagView.nodeIds.length} 个节点</span>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Scrollable area below header */}
