@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   PlusIcon,
   Trash2Icon,
@@ -10,11 +10,23 @@ import {
   PanelLeftOpenIcon,
 } from 'lucide-react';
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
-import { useLangGraphRuntime, LangGraphMessagesEvent, LangChainMessage } from '@assistant-ui/react-langgraph';
+import {
+  useLangGraphRuntime,
+  type LangGraphMessagesEvent,
+  type LangChainMessage,
+} from '@assistant-ui/react-langgraph';
+
+/** Event name aligned with @assistant-ui/react-langgraph (not re-exported from package entry). */
+const MESSAGES_COMPLETE_EVENT = 'messages/complete' as const;
 import { Thread } from './assistant-ui/Thread';
 import { authAPI, chatAPI, Session, tokenStorage, threadListAdapter, LANGGRAPH_API_V1_BASE } from '../services/llmApi';
 import { useToast } from './ui/toast';
 import { ConfirmDialog } from './ui/confirm-dialog';
+import {
+  PreDefinedWorkflowProvider,
+  type PreDefinedWorkflow,
+} from '../contexts/PreDefinedWorkflowContext';
+import { readChatStream } from '../utils/chatStream';
 
 interface ChatSession {
   id: string;
@@ -36,7 +48,22 @@ function ChatContent(): React.JSX.Element {
   });
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
   const [sessionMessages, setSessionMessages] = useState<Record<string, LangChainMessage[]>>({});
+  const [sessionWorkflows, setSessionWorkflows] = useState<Record<string, PreDefinedWorkflow>>({});
+  const preDefinedWorkflowRef = useRef<PreDefinedWorkflow>('default');
   const { toast } = useToast();
+
+  const currentWorkflow: PreDefinedWorkflow = currentSessionId
+    ? (sessionWorkflows[currentSessionId] ?? 'default')
+    : 'default';
+
+  useEffect(() => {
+    preDefinedWorkflowRef.current = currentWorkflow;
+  }, [currentWorkflow]);
+
+  const setCurrentSessionWorkflow = useCallback((workflow: PreDefinedWorkflow) => {
+    if (!currentSessionId) return;
+    setSessionWorkflows((prev) => ({ ...prev, [currentSessionId]: workflow }));
+  }, [currentSessionId]);
 
   const fetchSessions = useCallback(async (): Promise<void> => {
     try {
@@ -151,7 +178,10 @@ function ChatContent(): React.JSX.Element {
         },
         body: JSON.stringify({
           messages: [{ role: 'user', content: userMessage }],
-          system_prompt: '简要概括一下用户的问题，不超过20个字，不要输出标点符号和其他多余内容，不需要调用skill和工具，只输出概括内容，不需要其他任何回复',
+          system_prompt:
+            '简要概括一下用户的问题，不超过20个字，不要输出标点符号和其他多余内容，不需要调用skill和工具，只输出概括内容，不需要其他任何回复',
+          // 标题生成走 default agent；与 system_prompt 同传 workflow 会导致后端路由混乱
+          pre_defined_workflow: null,
         }),
       });
 
@@ -159,20 +189,15 @@ function ChatContent(): React.JSX.Element {
       if (!reader) return;
 
       let summary = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = new TextDecoder().decode(value);
-        const lines = chunk.split('\n').filter(line => line.trim());
-        for (const line of lines) {
-          try {
-            const data = JSON.parse(line.replace('data:', ''));
-            if (data.content) summary += data.content;
-          } catch { /* skip parse errors */ }
+      try {
+        for await (const data of readChatStream(reader)) {
+          if (!data.done && data.content) {
+            summary += data.content;
+          }
         }
+      } finally {
+        reader.releaseLock();
       }
-
-      reader.releaseLock();
 
       if (summary.trim()) {
         await authAPI.updateSessionName(sessionId, summary.trim());
@@ -214,6 +239,7 @@ function ChatContent(): React.JSX.Element {
       }
 
       let assistantContent = '';
+      const assistantMessageId = crypto.randomUUID();
 
       try {
         const transformedMessages = messages.map(msg => ({
@@ -227,38 +253,40 @@ function ChatContent(): React.JSX.Element {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${sessionToken}`,
           },
-          body: JSON.stringify({ messages: transformedMessages }),
+          body: JSON.stringify({
+            messages: transformedMessages,
+            pre_defined_workflow: preDefinedWorkflowRef.current,
+          }),
           signal: abortSignal,
         });
 
+        if (!response.ok) {
+          const errText = await response.text().catch(() => response.statusText);
+          throw new Error(errText || `Stream request failed (${response.status})`);
+        }
+
         const reader = response.body?.getReader();
-        if (!reader) return;
+        if (!reader) {
+          throw new Error('No response body from stream');
+        }
 
         try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+          for await (const data of readChatStream(reader)) {
+            if (data.done) {
+              break;
+            }
 
-            const chunk = new TextDecoder().decode(value);
-            const lines = chunk.split('\n').filter(line => line.trim());
-
-            for (const line of lines) {
-              try {
-                const data = JSON.parse(line.replace('data:', ''));
-                assistantContent += data.content;
-
-                const event: LangGraphMessagesEvent<LangChainMessage> = {
-                  event: 'messages/complete',
-                  data: [{
-                    type: 'ai',
-                    content: data.content,
-                  }]
-                };
-
-                yield event;
-              } catch (error) {
-                console.error('Failed to parse stream chunk:', error);
-              }
+            // Backend sends full assistant text per chunk (including ask_human / interrupt prompts).
+            if (data.content) {
+              assistantContent = data.content;
+              yield {
+                event: MESSAGES_COMPLETE_EVENT,
+                data: [{
+                  id: assistantMessageId,
+                  type: 'ai',
+                  content: assistantContent,
+                }],
+              } satisfies LangGraphMessagesEvent<LangChainMessage>;
             }
           }
         } finally {
@@ -495,9 +523,14 @@ function ChatContent(): React.JSX.Element {
         {/* Chat Body */}
         <div className="flex-1 overflow-hidden">
           {currentSessionId ? (
-            <AssistantRuntimeProvider runtime={runtime} key={currentSessionId}>
-              <Thread />
-            </AssistantRuntimeProvider>
+            <PreDefinedWorkflowProvider
+              workflow={currentWorkflow}
+              setWorkflow={setCurrentSessionWorkflow}
+            >
+              <AssistantRuntimeProvider runtime={runtime} key={currentSessionId}>
+                <Thread />
+              </AssistantRuntimeProvider>
+            </PreDefinedWorkflowProvider>
           ) : (
             <div className="h-full flex items-center justify-center text-gray-400">
               <div className="flex flex-col items-center gap-3">
