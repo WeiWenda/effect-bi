@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MailIcon, LockIcon, EyeIcon, EyeOffIcon } from 'lucide-react';
+import { defaultAppPath } from '../config/appMode';
 import { authAPI, TokenResponse, tokenStorage } from '../services/llmApi';
 
 export default function Login(): React.JSX.Element {
@@ -33,7 +34,7 @@ export default function Login(): React.JSX.Element {
     try {
       const response: TokenResponse = await authAPI.login(email, password);
       tokenStorage.setUserToken(response.access_token);
-      navigate('/chat');
+      navigate(defaultAppPath);
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败，请重试');
     } finally {

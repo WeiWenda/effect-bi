@@ -312,7 +312,7 @@ export function Neo4jTableTreePanel({ selectedRouteTableName }: Neo4jTableTreePa
             if (isLeaf) {
               e.stopPropagation();
               if (node.routeTableName) {
-                navigate(`/lineage/table/${encodeURIComponent(node.routeTableName)}?tab=fields`);
+                navigate(`/lineage/table/${encodeURIComponent(node.routeTableName)}`);
               }
             } else {
               toggleNode(node, catalogName);

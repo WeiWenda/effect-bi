@@ -67,8 +67,11 @@ export function LineageConfigPanel({ config, onConfigChange, onApply }: LineageC
 
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">
-                默认展开数量
+                每层默认展开数量
               </label>
+              <p className="mb-1 text-[11px] text-gray-500">
+                相对中心表每一跳（上游/下游分开）各自最多展示该数量
+              </p>
               <input
                 type="number"
                 min="1"

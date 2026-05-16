@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ChevronLeftIcon, ExternalLinkIcon, Network as NetworkIcon } from 'lucide-react';
+import { ChevronLeftIcon, CheckIcon, Loader2Icon, Network as NetworkIcon, PencilIcon, XIcon } from 'lucide-react';
 import {
   ReactFlow,
   Node,
@@ -14,41 +14,28 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { dagAPI, DagView } from '../../services/dagApi';
-import { etlAPI } from '../../services/etlApi';
 import { lineageAPI } from '../../services/lineageApi';
 import {
+  lineageNodeFilePath,
   lineageTableDescription,
-  lineageTableDisplayName,
   lineageTableLayer,
+  lineageTableNodeLabel,
 } from '../../services/lineageNodeMeta';
+import { DagTaskDevelopmentPanel, type DagTaskDevelopmentNodeData } from './DagTaskDevelopmentPanel';
 import { TaskOperationsTable } from './TaskOperationsTable';
 import ELK from 'elkjs/lib/elk.bundled.js';
+import { LineageNodeTableLabel } from '../lineage-explore/LineageNodeTableLabel';
+import { LINEAGE_GRAPH_NODE_BOX_CLASS, LINEAGE_GRAPH_NODE_WIDTH } from '../lineage-explore/lineageGraphNodeLayout';
+import { useToast } from '../ui/toast';
 
 interface DagDetailPageProps {
   dagId: number;
   onBack: () => void;
 }
 
-interface NodeData {
-  label: string;
-  /** 血缘三元组（解析 ETL 逻辑任务名） */
-  catalogName?: string;
-  databaseName?: string;
-  tableName?: string;
-  /** catalog.database.table，运维表等展示用 */
-  qualifiedTableName?: string;
-  /** Neo4j Table，已发布 ETL 同步的 DAG id，如 auto_generate_14 */
-  airflowDagId?: string;
-  layer?: string;
-  description?: string;
-  entityId: string;
+interface NodeData extends DagTaskDevelopmentNodeData {
   focused?: boolean;
-  taskFile?: string;
 }
-
-const AIRFLOW_UI_BASE =
-  (import.meta.env.VITE_AIRFLOW_UI_BASE_URL as string | undefined)?.replace(/\/$/, '') ||
-  'http://localhost:8080';
 
 const CustomNode = ({ data, onClick }: { data: NodeData; onClick?: () => void }) => {
   const nodeClass = data.focused
@@ -57,15 +44,13 @@ const CustomNode = ({ data, onClick }: { data: NodeData; onClick?: () => void })
 
   return (
     <div
-      className={`px-4 py-3 border-2 rounded-lg shadow-sm min-w-[180px] cursor-pointer ${nodeClass}`}
+      className={`${LINEAGE_GRAPH_NODE_BOX_CLASS} cursor-pointer ${nodeClass}`}
       onClick={onClick}
     >
       <Handle type="target" position={Position.Left} className="!w-2 !h-2" />
-      <div className="text-sm font-medium text-gray-800 mb-1">{data.label}</div>
+      <LineageNodeTableLabel name={data.label} />
       {data.description && (
-        <div className="text-xs text-gray-600 mb-1 line-clamp-2" title={data.description}>
-          {data.description}
-        </div>
+        <div className="mb-1 w-full min-w-0 truncate text-xs text-gray-600">{data.description}</div>
       )}
       {data.layer && (
         <div className="text-xs text-gray-500">{data.layer}</div>
@@ -104,7 +89,7 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], options = {}): Promis
       ...n,
       targetPosition: Position.Left,
       sourcePosition: Position.Right,
-      width: 220,
+      width: LINEAGE_GRAPH_NODE_WIDTH,
       height: 50,
     })),
     edges: edges.map((e) => ({
@@ -139,13 +124,18 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], options = {}): Promis
 
 const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
   const { fitView } = useReactFlow();
+  const { toast } = useToast();
   const [dagView, setDagView] = useState<DagView | null>(null);
   const [loading, setLoading] = useState(true);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const [activeTab, setActiveTab] = useState<'development' | 'operations'>('operations');
+  const [activeTab, setActiveTab] = useState<'development' | 'operations'>('development');
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [draftName, setDraftName] = useState('');
+  const [draftDescription, setDraftDescription] = useState('');
+  const [savingMeta, setSavingMeta] = useState(false);
 
   useEffect(() => {
     const handleResize = () => {
@@ -204,7 +194,7 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
         // Add nodes
         path.nodes.forEach((lineageNode) => {
           const p = lineageNode.properties as Record<string, unknown>;
-          const nodeName = lineageTableDisplayName(p);
+          const nodeName = lineageTableNodeLabel(p);
           const catalogRaw = typeof p.catalog_name === 'string' ? p.catalog_name.trim() : '';
           const databaseRaw = typeof p.database_name === 'string' ? p.database_name.trim() : '';
           const tableRaw = typeof p.table_name === 'string' ? p.table_name.trim() : '';
@@ -213,12 +203,7 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
             databaseRaw && tableRaw ? `${catalog}.${databaseRaw}.${tableRaw}` : undefined;
           const layer = lineageTableLayer(p);
           const description = lineageTableDescription(p);
-          const tf =
-            typeof p.task_file === 'string' && p.task_file.trim()
-              ? p.task_file.trim()
-              : typeof p.AIRFLOW_DAG_ID === 'string' && p.AIRFLOW_DAG_ID.trim()
-                ? p.AIRFLOW_DAG_ID.trim()
-                : undefined;
+          const filePath = lineageNodeFilePath(p);
 
           const airflowDagIdRaw =
             typeof p.AIRFLOW_DAG_ID === 'string' && p.AIRFLOW_DAG_ID.trim()
@@ -243,7 +228,8 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
                 description,
                 entityId: lineageNode.id,
                 focused: false,
-                taskFile: tf ?? (typeof p.taskFile === 'string' ? p.taskFile : undefined),
+                filePath,
+                entityProperties: p,
               },
             };
             nodeMap.set(lineageNode.id, newNode);
@@ -286,6 +272,45 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
     setActiveTab(tab);
   };
 
+  const beginEditMeta = useCallback(() => {
+    if (!dagView) return;
+    setDraftName(dagView.name);
+    setDraftDescription(dagView.description ?? '');
+    setEditingMeta(true);
+  }, [dagView]);
+
+  const cancelEditMeta = useCallback(() => {
+    setEditingMeta(false);
+  }, []);
+
+  const handleSaveMeta = useCallback(async () => {
+    if (!dagView) return;
+    const name = draftName.trim();
+    if (!name) {
+      toast('名称不能为空', 'error');
+      return;
+    }
+    const description = draftDescription.trim() || null;
+    const unchanged = name === dagView.name && description === (dagView.description ?? null);
+    if (unchanged) {
+      setEditingMeta(false);
+      return;
+    }
+
+    setSavingMeta(true);
+    try {
+      const { dagView: updated } = await dagAPI.updateDag(dagId, { name, description });
+      setDagView(updated);
+      setEditingMeta(false);
+      toast('已保存', 'success');
+    } catch (error) {
+      console.error('Error updating DAG view:', error);
+      toast('保存失败，请稍后重试', 'error');
+    } finally {
+      setSavingMeta(false);
+    }
+  }, [dagId, dagView, draftDescription, draftName, toast]);
+
   /** 任务运维表行 → 仅与上方图中节点同步选中（不移动视口、不切 Tab） */
   const handleSelectNodeFromOperations = useCallback((nodeId: string) => {
     setFocusedNodeId(nodeId);
@@ -308,62 +333,6 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
     [nodes, focusedNodeId]
   );
   const focusedNodeData = focusedNode?.data as NodeData | undefined;
-  const airflowDagHref =
-    focusedNodeData?.airflowDagId != null && focusedNodeData.airflowDagId !== ''
-      ? `${AIRFLOW_UI_BASE}/dags/${encodeURIComponent(focusedNodeData.airflowDagId)}`
-      : null;
-
-  const [etlTaskNameResolved, setEtlTaskNameResolved] = useState<string | null>(null);
-  const [etlResolveState, setEtlResolveState] = useState<'idle' | 'loading' | 'ok' | 'notfound' | 'error'>(
-    'idle'
-  );
-
-  useEffect(() => {
-    const db = focusedNodeData?.databaseName?.trim() ?? '';
-    const tb = focusedNodeData?.tableName?.trim() ?? '';
-    const cat = focusedNodeData?.catalogName?.trim() ?? '';
-
-    if (!db || !tb) {
-      setEtlTaskNameResolved(null);
-      setEtlResolveState('idle');
-      return;
-    }
-
-    const ac = new AbortController();
-    setEtlResolveState('loading');
-    setEtlTaskNameResolved(null);
-
-    void (async () => {
-      try {
-        const res = await etlAPI.getTaskNameByOutputTable(cat, db, tb, { signal: ac.signal });
-        const name = res?.name?.trim();
-        if (!name) {
-          setEtlTaskNameResolved(null);
-          setEtlResolveState('notfound');
-          return;
-        }
-        setEtlTaskNameResolved(name);
-        setEtlResolveState('ok');
-      } catch (e) {
-        if (ac.signal.aborted) return;
-        console.error(e);
-        setEtlTaskNameResolved(null);
-        setEtlResolveState('error');
-      }
-    })();
-
-    return () => ac.abort();
-  }, [
-    focusedNodeId,
-    focusedNodeData?.catalogName,
-    focusedNodeData?.databaseName,
-    focusedNodeData?.tableName,
-  ]);
-
-  const etlTaskDevHref =
-    etlResolveState === 'ok' && etlTaskNameResolved
-      ? `/etl?task=${encodeURIComponent(etlTaskNameResolved)}`
-      : null;
 
   if (loading) {
     return (
@@ -375,9 +344,9 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
-      {/* 顶栏与 Cube 详情一致：Chevron + 图标 + 标题 + 辅文 */}
-      <div className="flex shrink-0 items-center border-b border-gray-200 bg-white px-4 py-3">
-        <div className="flex min-w-0 items-center gap-3">
+      {/* 顶栏：返回 + 可编辑名称 / 描述 */}
+      <div className="flex shrink-0 border-b border-gray-200 bg-white px-4 py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <button
             type="button"
             onClick={onBack}
@@ -389,17 +358,96 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
           {dagView && (
             <>
               <NetworkIcon className="size-5 shrink-0 text-blue-600" aria-hidden />
-              <h1 className="truncate text-lg font-semibold text-gray-800">{dagView.name}</h1>
-              <span className="shrink-0 text-xs tabular-nums text-gray-500">{dagView.nodeIds.length} 个节点</span>
+              <div className="min-w-0 flex-1">
+                {editingMeta ? (
+                  <div className="flex min-w-0 items-center gap-2">
+                    <input
+                      type="text"
+                      value={draftName}
+                      onChange={e => setDraftName(e.target.value)}
+                      disabled={savingMeta}
+                      className="min-w-0 flex-1 max-w-xs rounded-md border border-gray-300 px-2.5 py-1 text-lg font-semibold text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-60"
+                      placeholder="名称"
+                      autoFocus
+                    />
+                    <span className="shrink-0 text-gray-300" aria-hidden>
+                      |
+                    </span>
+                    <input
+                      type="text"
+                      value={draftDescription}
+                      onChange={e => setDraftDescription(e.target.value)}
+                      disabled={savingMeta}
+                      className="min-w-0 flex-[2] rounded-md border border-gray-300 px-2.5 py-1 text-sm text-gray-700 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-60"
+                      placeholder="描述（可选）"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex min-w-0 items-baseline gap-2 truncate">
+                    <h1 className="shrink-0 text-lg font-semibold text-gray-800">{dagView.name}</h1>
+                    <span className="shrink-0 text-gray-300" aria-hidden>
+                      |
+                    </span>
+                    <span
+                      className={`min-w-0 truncate text-sm ${
+                        dagView.description ? 'text-gray-600' : 'text-gray-400'
+                      }`}
+                      title={dagView.description ?? undefined}
+                    >
+                      {dagView.description || '暂无描述'}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                {editingMeta ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveMeta()}
+                      disabled={savingMeta}
+                      className="inline-flex size-8 items-center justify-center rounded-md border border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100 disabled:opacity-50"
+                      title="保存"
+                      aria-label="保存"
+                    >
+                      {savingMeta ? (
+                        <Loader2Icon className="size-4 animate-spin" />
+                      ) : (
+                        <CheckIcon className="size-4" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelEditMeta}
+                      disabled={savingMeta}
+                      className="inline-flex size-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                      title="取消"
+                      aria-label="取消"
+                    >
+                      <XIcon className="size-4" />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={beginEditMeta}
+                    className="inline-flex size-8 items-center justify-center rounded-md text-gray-600 hover:bg-gray-100"
+                    title="编辑名称与描述"
+                    aria-label="编辑名称与描述"
+                  >
+                    <PencilIcon className="size-4" />
+                  </button>
+                )}
+              </div>
             </>
           )}
         </div>
       </div>
 
-      {/* Scrollable area below header */}
-      <div className="flex-1 overflow-y-auto">
+      {/* 下方区域固定占满剩余高度，避免整页滚动 */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {/* Upper part: DAG graph */}
-        <div className="border-b border-gray-200" style={{ height: `${windowHeight * 0.2}px` }}>
+        <div className="shrink-0 border-b border-gray-200" style={{ height: `${windowHeight * 0.2}px` }}>
           <div className="h-full w-full relative">
             <ReactFlow
               nodes={nodes}
@@ -415,9 +463,9 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
         </div>
 
         {/* Lower part: Tabs */}
-        <div className="flex flex-col bg-white">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white">
           {/* Tab headers */}
-          <div className="flex border-b border-gray-200 sticky top-0 bg-white z-10">
+          <div className="flex shrink-0 border-b border-gray-200 bg-white">
             <button
               onClick={() => handleTabChange('development')}
               className={`px-6 py-3 text-sm font-medium transition-colors ${
@@ -441,79 +489,19 @@ const DagDetailContent = ({ dagId, onBack }: DagDetailPageProps) => {
           </div>
 
           {/* Tab content */}
-          <div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {activeTab === 'development' ? (
-              <div className="mx-4 my-4 min-h-[420px] rounded-lg border border-gray-200 bg-white px-6 py-8 shadow-sm">
-                {!focusedNodeId ? (
-                  <div className="flex flex-col items-center justify-center gap-2 py-20 text-center text-gray-500">
-                    <p className="text-sm font-medium text-gray-700">任务开发</p>
-                    <p className="text-sm">
-                      请在上方 DAG 图中点击节点查看 Airflow DAG 与 ETL 任务开发链接。若在「任务运维」中已点击任务行与图中节点同步选中，可切换到本 Tab
-                      查看同一节点的跳转链接。
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-4 max-w-xl">
-                    <div>
-                      <p className="text-xs font-medium uppercase tracking-wide text-gray-400">当前表</p>
-                      <p className="mt-1 text-sm font-semibold text-gray-900">
-                        {focusedNodeData?.qualifiedTableName ?? focusedNodeData?.label ?? focusedNodeId}
-                      </p>
-                    </div>
-                    {airflowDagHref ? (
-                      <div className="rounded-lg border border-blue-100 bg-blue-50/80 px-4 py-3">
-                        <p className="text-xs text-gray-600 mb-2">Airflow（新标签页打开）</p>
-                        <a
-                          href={airflowDagHref}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-800 underline-offset-2 hover:underline"
-                        >
-                          <ExternalLinkIcon className="size-4 shrink-0" aria-hidden />
-                          {focusedNodeData?.airflowDagId}
-                        </a>
-                        <p className="mt-2 text-xs text-gray-500 break-all">{airflowDagHref}</p>
-                      </div>
-                    ) : (
-                      <p className="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
-                        该节点暂无 AIRFLOW_DAG_ID（通常表示尚未通过本系统发布 ETL，或未同步到 Neo4j）。
-                      </p>
-                    )}
-                    {etlResolveState === 'loading' && (
-                      <p className="text-sm text-gray-500">正在解析 ETL 任务…</p>
-                    )}
-                    {etlTaskDevHref ? (
-                      <div className="rounded-lg border border-emerald-100 bg-emerald-50/80 px-4 py-3">
-                        <p className="text-xs text-gray-600 mb-2">ETL 任务开发（新标签页打开并定位任务）</p>
-                        <a
-                          href={etlTaskDevHref}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 text-sm font-medium text-emerald-700 hover:text-emerald-900 underline-offset-2 hover:underline"
-                        >
-                          <ExternalLinkIcon className="size-4 shrink-0" aria-hidden />
-                          {etlTaskNameResolved}
-                        </a>
-                        <p className="mt-2 text-xs text-gray-500 break-all">{etlTaskDevHref}</p>
-                      </div>
-                    ) : etlResolveState === 'notfound' ? (
-                      <p className="text-sm text-gray-600 bg-gray-50 border border-gray-100 rounded-md px-3 py-2">
-                        当前产出表未在 ETL 任务库登记，无法打开任务开发。
-                      </p>
-                    ) : etlResolveState === 'error' ? (
-                      <p className="text-sm text-red-800 bg-red-50 border border-red-100 rounded-md px-3 py-2">
-                        解析 ETL 任务失败，请稍后重试。
-                      </p>
-                    ) : null}
-                  </div>
-                )}
+              <div className="mx-4 my-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
+                <DagTaskDevelopmentPanel focusedNodeId={focusedNodeId} nodeData={focusedNodeData} />
               </div>
             ) : (
-              <TaskOperationsTable
-                dagId={dagId}
-                taskNames={taskNames}
-                onTaskRowClick={handleSelectNodeFromOperations}
-              />
+              <div className="min-h-0 flex-1 overflow-auto">
+                <TaskOperationsTable
+                  dagId={dagId}
+                  taskNames={taskNames}
+                  onTaskRowClick={handleSelectNodeFromOperations}
+                />
+              </div>
             )}
           </div>
         </div>

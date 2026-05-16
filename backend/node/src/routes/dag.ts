@@ -9,6 +9,29 @@ interface CreateDagRequest {
   description?: string;
 }
 
+interface UpdateDagRequest {
+  name?: string;
+  description?: string | null;
+}
+
+function mapDagRow(row: {
+  id: number;
+  name: string;
+  description: string | null;
+  node_ids: string[];
+  created_at: Date;
+  updated_at: Date;
+}): DagView {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    nodeIds: row.node_ids,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 interface DagView {
   id: number;
   name: string;
@@ -40,16 +63,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       `;
       const result = await client.query(query, [name, description || null, JSON.stringify(nodeIds)]);
       
-      const dagView: DagView = {
-        id: result.rows[0].id,
-        name: result.rows[0].name,
-        description: result.rows[0].description,
-        nodeIds: result.rows[0].node_ids,
-        createdAt: result.rows[0].created_at,
-        updatedAt: result.rows[0].updated_at,
-      };
-
-      res.status(201).json({ dagView });
+      res.status(201).json({ dagView: mapDagRow(result.rows[0]) });
     } finally {
       client.release();
     }
@@ -74,14 +88,9 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       `;
       const result = await client.query(query);
       
-      const dagViews: DagView[] = result.rows.map((row: any) => ({
-        id: row.id,
-        name: row.name,
-        description: row.description,
-        nodeIds: row.node_ids,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      }));
+      const dagViews: DagView[] = result.rows.map((row: { id: number; name: string; description: string | null; node_ids: string[]; created_at: Date; updated_at: Date }) =>
+        mapDagRow(row)
+      );
 
       res.json({ dagViews });
     } finally {
@@ -121,22 +130,84 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
         return;
       }
 
-      const dagView: DagView = {
-        id: result.rows[0].id,
-        name: result.rows[0].name,
-        description: result.rows[0].description,
-        nodeIds: result.rows[0].node_ids,
-        createdAt: result.rows[0].created_at,
-        updatedAt: result.rows[0].updated_at,
-      };
-
-      res.json({ dagView });
+      res.json({ dagView: mapDagRow(result.rows[0]) });
     } finally {
       client.release();
     }
   } catch (error) {
     console.error('Error getting DAG view:', error);
     res.status(500).json({ error: 'Failed to get DAG view' });
+  }
+});
+
+/**
+ * Update DAG view name / description
+ * PATCH /api/dag/:id
+ */
+router.patch('/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const rawId = req.params.id;
+    const id = Array.isArray(rawId) ? rawId[0] : rawId;
+    const body = req.body as UpdateDagRequest;
+
+    if (!id || isNaN(parseInt(id, 10))) {
+      res.status(400).json({ error: 'Valid DAG view ID is required' });
+      return;
+    }
+
+    const hasName = typeof body.name === 'string';
+    const hasDescription = body.description !== undefined;
+    if (!hasName && !hasDescription) {
+      res.status(400).json({ error: 'At least one of name or description is required' });
+      return;
+    }
+
+    if (hasName && !body.name!.trim()) {
+      res.status(400).json({ error: 'Name cannot be empty' });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      const sets: string[] = [];
+      const values: unknown[] = [];
+      let idx = 1;
+
+      if (hasName) {
+        sets.push(`name = $${idx++}`);
+        values.push(body.name!.trim());
+      }
+      if (hasDescription) {
+        const desc =
+          body.description === null || body.description === undefined
+            ? null
+            : String(body.description).trim() || null;
+        sets.push(`description = $${idx++}`);
+        values.push(desc);
+      }
+      sets.push('updated_at = NOW()');
+      values.push(id);
+
+      const query = `
+        UPDATE dag_views
+        SET ${sets.join(', ')}
+        WHERE id = $${idx}
+        RETURNING id, name, description, node_ids, created_at, updated_at
+      `;
+      const result = await client.query(query, values);
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: 'DAG view not found' });
+        return;
+      }
+
+      res.json({ dagView: mapDagRow(result.rows[0]) });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error updating DAG view:', error);
+    res.status(500).json({ error: 'Failed to update DAG view' });
   }
 });
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronLeftIcon, Table as TableIcon } from 'lucide-react';
+import { ChevronLeftIcon, ExternalLinkIcon, Table as TableIcon } from 'lucide-react';
 import { TableFieldsTab } from './TableFieldsTab';
 import { TableOutputTab } from './TableOutputTab';
 import { LineageGraphTab } from './LineageGraphTab';
@@ -9,6 +9,7 @@ import {
   lineageEntityRouteTableName,
   lineageEtlTaskInfoId,
   lineageTableDisplayName,
+  lineageMaxComputeDataWorksUrl,
   lineageTableGravitinoLocation,
   lineageTableLayer,
 } from '../../services/lineageNodeMeta';
@@ -36,6 +37,8 @@ export function TableDetailPage(): React.JSX.Element {
     layer: string;
     gravitinoLocation: { catalog: string; database: string; table: string } | null;
     entityId: string;
+    /** Neo4j 中心表属性，供血缘图节点展示 */
+    entityProperties: Record<string, unknown>;
     /** Neo4j `etl_task_id` ↔ PG etl_task_info.id */
     etlTaskInfoId: number | null;
   } | null>(null);
@@ -72,6 +75,7 @@ export function TableDetailPage(): React.JSX.Element {
             layer: lineageTableLayer(p),
             gravitinoLocation: lineageTableGravitinoLocation(p),
             entityId: entity.id,
+            entityProperties: p,
             etlTaskInfoId: lineageEtlTaskInfoId(p),
           });
         } else {
@@ -91,6 +95,10 @@ export function TableDetailPage(): React.JSX.Element {
   const handleBack = () => {
     navigate('/lineage');
   };
+
+  const maxComputeDataWorksUrl = tableData
+    ? lineageMaxComputeDataWorksUrl(tableData.entityProperties)
+    : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-gray-50">
@@ -118,6 +126,18 @@ export function TableDetailPage(): React.JSX.Element {
               >
                 {tableData.layer}
               </span>
+              {maxComputeDataWorksUrl && (
+                <a
+                  href={maxComputeDataWorksUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex shrink-0 items-center rounded p-1 text-purple-700 transition-colors hover:bg-purple-50"
+                  title="在 DataWorks 中打开"
+                >
+                  <ExternalLinkIcon className="size-4" aria-hidden />
+                  <span className="sr-only">在 DataWorks 中打开</span>
+                </a>
+              )}
             </>
           )}
         </div>
@@ -142,6 +162,17 @@ export function TableDetailPage(): React.JSX.Element {
           <div className="flex flex-wrap border-b border-gray-200 bg-white">
             <button
               type="button"
+              onClick={() => handleTabChange('lineage')}
+              className={`px-6 py-4 text-sm font-medium transition-colors ${
+                activeTab === 'lineage'
+                  ? 'border-b-2 border-blue-600 bg-blue-50 text-blue-600'
+                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-800'
+              }`}
+            >
+              数据血缘
+            </button>
+            <button
+              type="button"
               onClick={() => handleTabChange('fields')}
               className={`px-6 py-4 text-sm font-medium transition-colors ${
                 activeTab === 'fields'
@@ -162,17 +193,6 @@ export function TableDetailPage(): React.JSX.Element {
             >
               产出信息
             </button>
-            <button
-              type="button"
-              onClick={() => handleTabChange('lineage')}
-              className={`px-6 py-4 text-sm font-medium transition-colors ${
-                activeTab === 'lineage'
-                  ? 'border-b-2 border-blue-600 bg-blue-50 text-blue-600'
-                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-800'
-              }`}
-            >
-              数据血缘
-            </button>
           </div>
 
           {/* Tab content */}
@@ -189,6 +209,7 @@ export function TableDetailPage(): React.JSX.Element {
                 entityId={tableData.entityId}
                 tableName={tableData.tableName}
                 routeTableName={tableData.routeTableName}
+                centerProperties={tableData.entityProperties}
               />
             )}
           </div>

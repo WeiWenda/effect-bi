@@ -14,16 +14,18 @@ import {
 import '@xyflow/react/dist/style.css';
 import { ChevronLeft, ChevronRight, Plus, Minus, ExternalLink, Eye, EyeOff, Check, MoreVerticalIcon } from 'lucide-react';
 import ELK from 'elkjs/lib/elk.bundled.js';
-import { lineageAPI, LineageNode, LineageRelationship } from '../../services/lineageApi';
+import { lineageAPI, LineageNode, LineagePath, LineageRelationship } from '../../services/lineageApi';
 import {
   lineageEntityRouteTableName,
   lineageTableDescription,
-  lineageTableDisplayName,
+  lineageTableNodeLabel,
   lineageTableLayer,
 } from '../../services/lineageNodeMeta';
 import { dagAPI } from '../../services/dagApi';
 import { LineageConfigPanel, LineageConfig } from './LineageConfigPanel';
 import { HiddenNodesPanel } from './HiddenNodesPanel';
+import { LineageNodeTableLabel } from './LineageNodeTableLabel';
+import { LINEAGE_GRAPH_NODE_BOX_CLASS, LINEAGE_GRAPH_NODE_WIDTH } from './lineageGraphNodeLayout';
 import { useToast } from '../ui/toast';
 
 interface LineageGraphTabProps {
@@ -31,6 +33,170 @@ interface LineageGraphTabProps {
   tableName: string;
   /** 用于详情页 URL、与 /lineage/entity?tableName= 一致 */
   routeTableName: string;
+  /** 中心表 Neo4j 属性（catalog/database、catalog_type 等） */
+  centerProperties?: Record<string, unknown>;
+}
+
+function findCenterPropertiesInPaths(
+  paths: LineagePath[],
+  entityId: string
+): Record<string, unknown> | undefined {
+  for (const path of paths) {
+    const node = path.nodes.find(n => n.id === entityId);
+    if (node?.properties) return node.properties as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function buildCenterNodeDisplay(
+  entityId: string,
+  routeTableName: string,
+  properties?: Record<string, unknown>
+): Pick<NodeData, 'label' | 'routeTableName' | 'layer' | 'description' | 'entityId'> {
+  if (properties) {
+    return {
+      label: lineageTableNodeLabel(properties),
+      routeTableName: lineageEntityRouteTableName(properties),
+      layer: lineageTableLayer(properties),
+      description: lineageTableDescription(properties),
+      entityId,
+    };
+  }
+  return { label: routeTableName, routeTableName, entityId };
+}
+
+/** 从中心表沿 MAKEUP 边求最短跳数（层深）；上下游分开，互不占名额 */
+function computeHopDepthsFromEdges(
+  centerId: string,
+  edges: Array<{ source: string; target: string }>,
+  direction: 'upstream' | 'downstream'
+): Map<string, number> {
+  const relaxEdges: Array<[string, string]> = [];
+  for (const e of edges) {
+    if (direction === 'downstream') {
+      relaxEdges.push([e.source, e.target]);
+    } else {
+      relaxEdges.push([e.target, e.source]);
+    }
+  }
+
+  const depths = new Map<string, number>();
+  depths.set(centerId, 0);
+
+  let changed = true;
+  let guard = 0;
+  while (changed && guard < 64) {
+    guard += 1;
+    changed = false;
+    for (const [from, to] of relaxEdges) {
+      const fromDepth = depths.get(from);
+      if (fromDepth === undefined) continue;
+      const nextDepth = fromDepth + 1;
+      const prev = depths.get(to);
+      if (prev === undefined || nextDepth < prev) {
+        depths.set(to, nextDepth);
+        changed = true;
+      }
+    }
+  }
+  return depths;
+}
+
+function computeHopDepths(
+  centerId: string,
+  paths: LineagePath[],
+  direction: 'upstream' | 'downstream'
+): Map<string, number> {
+  const edges = paths.flatMap(path =>
+    path.relationships.map(rel => ({ source: rel.startNodeId, target: rel.endNodeId }))
+  );
+  return computeHopDepthsFromEdges(centerId, edges, direction);
+}
+
+/** 按层深分组，每层仅保留前 limit 个（按首次出现顺序） */
+function hiddenIdsBeyondPerLayerLimit(
+  orderByFirstAppearance: string[],
+  depths: Map<string, number>,
+  limit: number
+): Set<string> {
+  const countAtDepth = new Map<number, number>();
+  const hidden = new Set<string>();
+  for (const id of orderByFirstAppearance) {
+    const depth = depths.get(id) ?? 1;
+    if (depth <= 0) continue;
+    const seen = countAtDepth.get(depth) ?? 0;
+    if (seen >= limit) {
+      hidden.add(id);
+    } else {
+      countAtDepth.set(depth, seen + 1);
+    }
+  }
+  return hidden;
+}
+
+const LINEAGE_GRAPH_CONFIG_KEY = 'lineage-graph-config';
+
+const DEFAULT_LINEAGE_CONFIG: LineageConfig = {
+  upstreamDepth: 1,
+  downstreamDepth: 1,
+  limit: 5,
+};
+
+function readStoredLineageConfig(): LineageConfig {
+  try {
+    const raw = localStorage.getItem(LINEAGE_GRAPH_CONFIG_KEY);
+    if (!raw) return DEFAULT_LINEAGE_CONFIG;
+    const parsed = JSON.parse(raw) as Partial<LineageConfig>;
+    return {
+      upstreamDepth: Math.min(5, Math.max(1, Number(parsed.upstreamDepth) || 1)),
+      downstreamDepth: Math.min(5, Math.max(1, Number(parsed.downstreamDepth) || 1)),
+      limit: Math.min(500, Math.max(1, Number(parsed.limit) || 5)),
+    };
+  } catch {
+    return DEFAULT_LINEAGE_CONFIG;
+  }
+}
+
+/** 按方向 + 跳数重新计算 hidden（每层各 limit 个） */
+function applyPerLayerDisplayLimits(
+  nodes: Node[],
+  edges: Edge[],
+  centerId: string,
+  limit: number
+): Node[] {
+  const upstreamOrder = nodes.filter(n => n.data.direction === 'upstream').map(n => n.id);
+  const downstreamOrder = nodes.filter(n => n.data.direction === 'downstream').map(n => n.id);
+  const upstreamDepths = computeHopDepthsFromEdges(centerId, edges, 'upstream');
+  const downstreamDepths = computeHopDepthsFromEdges(centerId, edges, 'downstream');
+  const hiddenUpstream = hiddenIdsBeyondPerLayerLimit(upstreamOrder, upstreamDepths, limit);
+  const hiddenDownstream = hiddenIdsBeyondPerLayerLimit(downstreamOrder, downstreamDepths, limit);
+
+  return nodes.map(node => {
+    if (node.data.isCenter || node.data.direction === 'center') {
+      return { ...node, data: { ...node.data, hidden: false } };
+    }
+    const dir = node.data.direction as string;
+    const hidden =
+      dir === 'upstream'
+        ? hiddenUpstream.has(node.id)
+        : dir === 'downstream'
+          ? hiddenDownstream.has(node.id)
+          : Boolean(node.data.hidden);
+    const hop =
+      dir === 'upstream'
+        ? upstreamDepths.get(node.id)
+        : dir === 'downstream'
+          ? downstreamDepths.get(node.id)
+          : undefined;
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        hidden,
+        ...(hop !== undefined ? { level: hop } : {}),
+      },
+    };
+  });
 }
 
 interface NodeData {
@@ -99,13 +265,11 @@ const CustomNode = ({ data, onToggleHide, onToggleSelect, onToggleCollapse, onLo
   };
 
   return (
-    <div className={`px-4 py-3 border-2 rounded-lg shadow-sm min-w-[180px] ${nodeClass}`}>
+    <div className={`${LINEAGE_GRAPH_NODE_BOX_CLASS} ${nodeClass}`}>
       <Handle type="target" position={Position.Left} className="!w-2 !h-2" />
-      <div className="text-sm font-medium text-gray-800 mb-1">{data.label}</div>
+      <LineageNodeTableLabel name={data.label} />
       {data.description && (
-        <div className="text-xs text-gray-600 mb-1 line-clamp-2" title={data.description}>
-          {data.description}
-        </div>
+        <div className="mb-1 w-full min-w-0 truncate text-xs text-gray-600">{data.description}</div>
       )}
       {data.layer && (
         <div className="text-xs text-gray-500">{data.layer}</div>
@@ -168,10 +332,20 @@ const CustomNode = ({ data, onToggleHide, onToggleSelect, onToggleCollapse, onLo
   );
 };
 
-export function LineageGraphTab({ entityId, tableName, routeTableName }: LineageGraphTabProps): React.JSX.Element {
+export function LineageGraphTab({
+  entityId,
+  tableName,
+  routeTableName,
+  centerProperties,
+}: LineageGraphTabProps): React.JSX.Element {
   return (
     <ReactFlowProvider>
-      <LineageGraphContent entityId={entityId} tableName={tableName} routeTableName={routeTableName} />
+      <LineageGraphContent
+        entityId={entityId}
+        tableName={tableName}
+        routeTableName={routeTableName}
+        centerProperties={centerProperties}
+      />
     </ReactFlowProvider>
   );
 }
@@ -202,7 +376,7 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], options = {}): Promis
       ...node,
       targetPosition: 'left',
       sourcePosition: 'right',
-      width: 220,
+      width: LINEAGE_GRAPH_NODE_WIDTH,
       height: 50,
     })),
     edges: visibleEdges.map((edge) => ({
@@ -233,7 +407,12 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], options = {}): Promis
     });
 };
 
-const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGraphTabProps) => {
+const LineageGraphContent = ({
+  entityId,
+  tableName,
+  routeTableName,
+  centerProperties,
+}: LineageGraphTabProps) => {
   const { toast } = useToast();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -241,11 +420,16 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
   const [visableEdges, setVisableEdges] = useState<Edge[]>([]);
   const [initialLoading, setInitialLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [config, setConfig] = useState<LineageConfig>({
-    upstreamDepth: 1,
-    downstreamDepth: 1,
-    limit: 5,
-  });
+  const [config, setConfig] = useState<LineageConfig>(readStoredLineageConfig);
+
+  const handleConfigChange = useCallback((next: LineageConfig) => {
+    setConfig(next);
+    try {
+      localStorage.setItem(LINEAGE_GRAPH_CONFIG_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  }, []);
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
   const [dagName, setDagName] = useState('');
   const [saving, setSaving] = useState(false);
@@ -509,20 +693,22 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
         pathNodes.forEach(endNode => {
           const newNodeId = endNode.id;
           const ep = endNode.properties as Record<string, unknown>;
-          const nodeName = lineageTableDisplayName(ep);
+          const nodeName = lineageTableNodeLabel(ep);
           const layer = lineageTableLayer(ep);
           const description = lineageTableDescription(ep);
 
           if (!existingNodeIds.has(newNodeId)) {
             const parentNode = nodes.find(n => n.id === nodeId);
+            const parentLevel =
+              typeof parentNode?.data.level === 'number' ? parentNode.data.level : 0;
             const offsetX = direction === 'downstream' ? 300 : -300;
-            const existingCount = idx++;
+            const siblingIndex = idx++;
             const node: Node = {
               id: newNodeId,
               type: 'custom',
               position: {
                 x: (parentNode?.position?.x ?? 0) + offsetX,
-                y: (parentNode?.position?.y ?? 0) + existingCount * 80,
+                y: (parentNode?.position?.y ?? 0) + siblingIndex * 80,
               },
               data: {
                 label: nodeName,
@@ -532,9 +718,9 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
                 entityId: newNodeId,
                 isCenter: false,
                 direction,
-                level: 2,
+                level: parentLevel + 1,
                 loaded: { upstream: false, downstream: false },
-                hidden: existingCount >= config.limit,
+                hidden: false,
                 selected: false,
                 collapsed: { upstream: false, downstream: false },
               },
@@ -611,7 +797,13 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
           return node;
         });
 
-        setNodes(updatedNodesWithLoaded);
+        const limitedNodes = applyPerLayerDisplayLimits(
+          updatedNodesWithLoaded,
+          updatedEdges,
+          entityId,
+          config.limit
+        );
+        setNodes(limitedNodes);
         setEdges(updatedEdges);
         setCenterOnNodeId(nodeId);
       }
@@ -620,7 +812,7 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
     } finally {
       setLoadingMore(false);
     }
-  }, [nodes, edges, config.limit]);
+  }, [nodes, edges, config.limit, entityId]);
 
   const handleLoadDownstream = useCallback((nodeId: string) => handleLoad(nodeId, 'downstream'), [handleLoad]);
   const handleLoadUpstream = useCallback((nodeId: string) => handleLoad(nodeId, 'upstream'), [handleLoad]);
@@ -637,15 +829,22 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
       const newEdges: Edge[] = [];
       const nodeMap = new Map<string, Node>();
 
+      const pathCenterProps =
+        findCenterPropertiesInPaths(upstreamRes.paths, entityId) ??
+        findCenterPropertiesInPaths(downstreamRes.paths, entityId);
+      const centerDisplay = buildCenterNodeDisplay(
+        entityId,
+        routeTableName,
+        centerProperties ?? pathCenterProps
+      );
+
       // Add center node
       const centerNode: Node = {
         id: entityId,
         type: 'custom',
         position: { x: 0, y: 0 },
         data: {
-          label: tableName,
-          routeTableName,
-          entityId,
+          ...centerDisplay,
           isCenter: true,
           direction: 'center',
           level: 0,
@@ -658,9 +857,8 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
       nodeMap.set(entityId, centerNode);
       newNodes.push(centerNode);
 
-      // Track order of first appearance per direction for applying display limit
-      const upstreamOrder: string[] = [];
-      const downstreamOrder: string[] = [];
+      const upstreamDepths = computeHopDepths(entityId, upstreamRes.paths, 'upstream');
+      const downstreamDepths = computeHopDepths(entityId, downstreamRes.paths, 'downstream');
 
       // Process upstream paths — Cypher 为 (上游)-[:MAKEUP*]->(中心)，path 末端是当前表，不能只取 pathNodes[last]
       upstreamRes.paths.forEach((path) => {
@@ -669,12 +867,12 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
           if (pathNode.id === entityId) return;
           const nodeId = pathNode.id;
           const up = pathNode.properties as Record<string, unknown>;
-          const nodeName = lineageTableDisplayName(up);
+          const nodeName = lineageTableNodeLabel(up);
           const layer = lineageTableLayer(up);
           const description = lineageTableDescription(up);
 
           if (!nodeMap.has(nodeId)) {
-            upstreamOrder.push(nodeId);
+            const hop = upstreamDepths.get(nodeId) ?? 1;
             const node: Node = {
               id: nodeId,
               type: 'custom',
@@ -687,7 +885,7 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
                 entityId: nodeId,
                 isCenter: false,
                 direction: 'upstream',
-                level: 1,
+                level: hop,
                 loaded: { upstream: false, downstream: false },
                 hidden: false,
                 selected: false,
@@ -720,12 +918,12 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
           if (pathNode.id === entityId) return;
           const nodeId = pathNode.id;
           const dp = pathNode.properties as Record<string, unknown>;
-          const nodeName = lineageTableDisplayName(dp);
+          const nodeName = lineageTableNodeLabel(dp);
           const layer = lineageTableLayer(dp);
           const description = lineageTableDescription(dp);
 
           if (!nodeMap.has(nodeId)) {
-            downstreamOrder.push(nodeId);
+            const hop = downstreamDepths.get(nodeId) ?? 1;
             const node: Node = {
               id: nodeId,
               type: 'custom',
@@ -738,7 +936,7 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
                 entityId: nodeId,
                 isCenter: false,
                 direction: 'downstream',
-                level: 1,
+                level: hop,
                 loaded: { upstream: false, downstream: false },
                 hidden: false,
                 selected: false,
@@ -764,26 +962,15 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
         });
       });
 
-      // Apply display limit: mark nodes beyond config.limit as hidden per direction
-      const hiddenUpstreamIds = new Set(upstreamOrder.slice(config.limit));
-      const hiddenDownstreamIds = new Set(downstreamOrder.slice(config.limit));
-      const hiddenIds = new Set([...hiddenUpstreamIds, ...hiddenDownstreamIds]);
+      const nodesWithHidden = applyPerLayerDisplayLimits(newNodes, newEdges, entityId, config.limit);
 
-      const nodesWithHidden = newNodes.map(node => {
-        if (hiddenIds.has(node.id)) {
-          return { ...node, data: { ...node.data, hidden: true } };
-        }
-        return node;
-      });
-
-      // Set nodes and edges, let useEffect handle layout
       setNodes(nodesWithHidden);
       setEdges(newEdges);
     } catch (error) {
       console.error('Error loading lineage:', error);
       setInitialLoading(false);
     }
-  }, [entityId, tableName, routeTableName, config]);
+  }, [entityId, routeTableName, centerProperties, config]);
 
   useEffect(() => {
     loadInitialLineage();
@@ -866,7 +1053,7 @@ const LineageGraphContent = ({ entityId, tableName, routeTableName }: LineageGra
         />
         <LineageConfigPanel
           config={config}
-          onConfigChange={setConfig}
+          onConfigChange={handleConfigChange}
           onApply={loadInitialLineage}
         />
       </div>

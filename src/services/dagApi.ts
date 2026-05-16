@@ -34,6 +34,15 @@ export interface DeleteDagResponse {
   id: number;
 }
 
+export interface UpdateDagRequest {
+  name?: string;
+  description?: string | null;
+}
+
+export interface UpdateDagResponse {
+  dagView: DagView;
+}
+
 export const dagAPI = {
   /**
    * Create a DAG view from selected node IDs
@@ -65,6 +74,18 @@ export const dagAPI = {
   getDagById: async (id: number): Promise<GetDagByIdResponse> => {
     const response: AxiosResponse<GetDagByIdResponse> = await axios.get(
       `${DAG_API_BASE_URL}/${id}`
+    );
+    return response.data;
+  },
+
+  /**
+   * Update DAG view name / description
+   * PATCH /api/dag/:id
+   */
+  updateDag: async (id: number, data: UpdateDagRequest): Promise<UpdateDagResponse> => {
+    const response: AxiosResponse<UpdateDagResponse> = await axios.patch(
+      `${DAG_API_BASE_URL}/${id}`,
+      data
     );
     return response.data;
   },

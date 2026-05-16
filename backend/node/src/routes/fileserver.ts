@@ -1,13 +1,21 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import dotenv from 'dotenv';
-
-dotenv.config();
+import { getTaskHome, resolveTaskFilePath } from '../config/taskHome.js';
 
 const router: Router = Router();
 
-const TASK_HOME = process.env.TASK_HOME || '/opt/tasks';
+const FILE_EXT_CANDIDATES = ['', '.sql', '.py', '.hql'];
+
+function findReadableTaskFile(basePath: string): string | null {
+  for (const ext of FILE_EXT_CANDIDATES) {
+    const candidate = ext ? `${basePath}${ext}` : basePath;
+    if (!fs.existsSync(candidate)) continue;
+    const stats = fs.statSync(candidate);
+    if (stats.isFile()) return candidate;
+  }
+  return null;
+}
 
 /**
  * Get task file content
@@ -22,39 +30,27 @@ router.get('/task', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Security check: prevent path traversal
-    // File parameter is a relative path from TASK_HOME
-    const filePath = path.join(TASK_HOME, file);
-
-    console.log('TASK_HOME:', TASK_HOME);
-    console.log('Requested file:', file);
-    console.log('Full file path:', filePath);
-
-    // Security: ensure the path is within TASK_HOME
-    const resolvedPath = path.resolve(filePath);
-    const resolvedTaskHome = path.resolve(TASK_HOME);
-    if (!resolvedPath.startsWith(resolvedTaskHome)) {
+    const resolvedBase = resolveTaskFilePath(file);
+    if (!resolvedBase) {
       res.status(403).json({ error: 'Access denied: path outside TASK_HOME' });
       return;
     }
 
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      res.status(404).json({ error: 'Task file not found' });
+    const taskHome = getTaskHome();
+    const readablePath = findReadableTaskFile(resolvedBase);
+
+    if (!readablePath) {
+      res.status(404).json({
+        error: 'Task file not found',
+        file,
+        taskHome,
+        resolved: resolvedBase,
+      });
       return;
     }
 
-    // Check if it's a file (not a directory)
-    const stats = fs.statSync(filePath);
-    if (!stats.isFile()) {
-      res.status(400).json({ error: 'Path is not a file' });
-      return;
-    }
-
-    // Read file content
-    const content = fs.readFileSync(filePath, 'utf-8');
-
-    res.json({ content });
+    const content = fs.readFileSync(readablePath, 'utf-8');
+    res.json({ content, path: path.relative(taskHome, readablePath).replace(/\\/g, '/') });
   } catch (error) {
     console.error('Error reading task file:', error);
     res.status(500).json({ error: 'Failed to read task file' });

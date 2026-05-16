@@ -9,8 +9,10 @@ import Query from './components/Query';
 import Dashboard from './components/Dashboard';
 import { ETL } from './components/ETL';
 import Navbar from './components/Navbar';
+import { MetaOnlyRouteGuard } from './components/MetaOnlyRouteGuard';
 import { TooltipProvider } from './components/ui/tooltip';
 import { ToastProvider } from './components/ui/toast';
+import { defaultAppPath } from './config/appMode';
 import { tokenStorage } from './services/llmApi';
 
 interface ProtectedRouteProps {
@@ -32,7 +34,7 @@ interface PublicRouteProps {
 function PublicRoute({ children }: PublicRouteProps): React.ReactNode {
   const token = tokenStorage.getUserToken();
   if (token) {
-    return <Navigate to="/chat" />;
+    return <Navigate to={defaultAppPath} />;
   }
   return children;
 }
@@ -85,13 +87,55 @@ function App(): React.JSX.Element {
               </Route>
               <Route path="dags" element={<Dags />} />
               <Route path="dags/:id" element={<Dags />} />
-              <Route path="cube" element={<Cubes />} />
-              <Route path="cube/:name" element={<Cubes />} />
-              <Route path="query" element={<Query />} />
-              <Route path="dashboard" element={<Dashboard />} />
-              <Route path="dashboard/:id" element={<Dashboard />} />
-              <Route path="etl" element={<ETL />} />
-              <Route index element={<Navigate to="/chat" replace />} />
+              <Route
+                path="cube"
+                element={
+                  <MetaOnlyRouteGuard>
+                    <Cubes />
+                  </MetaOnlyRouteGuard>
+                }
+              />
+              <Route
+                path="cube/:name"
+                element={
+                  <MetaOnlyRouteGuard>
+                    <Cubes />
+                  </MetaOnlyRouteGuard>
+                }
+              />
+              <Route
+                path="query"
+                element={
+                  <MetaOnlyRouteGuard>
+                    <Query />
+                  </MetaOnlyRouteGuard>
+                }
+              />
+              <Route
+                path="dashboard"
+                element={
+                  <MetaOnlyRouteGuard>
+                    <Dashboard />
+                  </MetaOnlyRouteGuard>
+                }
+              />
+              <Route
+                path="dashboard/:id"
+                element={
+                  <MetaOnlyRouteGuard>
+                    <Dashboard />
+                  </MetaOnlyRouteGuard>
+                }
+              />
+              <Route
+                path="etl"
+                element={
+                  <MetaOnlyRouteGuard>
+                    <ETL />
+                  </MetaOnlyRouteGuard>
+                }
+              />
+              <Route index element={<Navigate to={defaultAppPath} replace />} />
             </Route>
             <Route path="*" element={<Navigate to="/login" />} />
           </Routes>

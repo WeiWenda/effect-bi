@@ -19,11 +19,25 @@ interface SearchResult {
   layer: string;
 }
 
+function entitiesToSearchResults(entities: LineageEntity[] | undefined): SearchResult[] {
+  if (!Array.isArray(entities)) return [];
+  return entities.map(entity => {
+    const properties = entity.properties ?? {};
+    return {
+      id: entity.id,
+      name: lineageTableDisplayName(properties),
+      routeTableName: lineageEntityRouteTableName(properties),
+      description: lineageTableDescription(properties),
+      layer: lineageTableLayer(properties),
+    };
+  });
+}
+
 /** /lineage 首页：搜索与热门表（右侧主区域，左侧树由 LineageLayout 提供） */
 export function LineageSearchPage(): React.JSX.Element {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [suggestions, setSuggestions] = useState<SearchResult[]>([]);
   const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -37,14 +51,7 @@ export function LineageSearchPage(): React.JSX.Element {
     const fetchTopTables = async () => {
       try {
         const response = await lineageAPI.getTopTablesByDegree(3);
-        const tables: SearchResult[] = response.entities.map((entity: LineageEntity) => ({
-          id: entity.id,
-          name: lineageTableDisplayName(entity.properties),
-          routeTableName: lineageEntityRouteTableName(entity.properties),
-          description: lineageTableDescription(entity.properties),
-          layer: lineageTableLayer(entity.properties),
-        }));
-        setTopTables(tables);
+        setTopTables(entitiesToSearchResults(response.entities));
       } catch (error) {
         console.error('Error fetching top tables:', error);
       }
@@ -54,21 +61,31 @@ export function LineageSearchPage(): React.JSX.Element {
 
   useEffect(() => {
     const timer = setTimeout(async () => {
-      if (searchQuery.trim().length > 0) {
-        try {
-          const response = await lineageAPI.searchEntities(searchQuery, 5);
-          const names = response.entities
-            .map((entity: LineageEntity) => entity.properties.name || entity.properties.table_name || '')
-            .filter((name: string) => name && name.toLowerCase().includes(searchQuery.toLowerCase()));
-          setSuggestions(names);
-          setShowSuggestions(true);
-        } catch (error) {
-          console.error('Error fetching suggestions:', error);
-          setSuggestions([]);
-        }
-      } else {
+      const q = searchQuery.trim();
+      if (q.length === 0) {
         setSuggestions([]);
         setShowSuggestions(false);
+        setSearchResults([]);
+        setTotalResults(0);
+        setHasSearched(false);
+        return;
+      }
+
+      try {
+        const response = await lineageAPI.searchEntities(q, 20);
+        const results = entitiesToSearchResults(response.entities);
+        setSuggestions(results);
+        setShowSuggestions(true);
+        setSearchResults(results);
+        setTotalResults(results.length);
+        setCurrentPage(1);
+        setHasSearched(true);
+      } catch (error) {
+        console.error('Error fetching suggestions:', error);
+        setSuggestions([]);
+        setSearchResults([]);
+        setTotalResults(0);
+        setHasSearched(true);
       }
     }, 1000);
 
@@ -84,16 +101,11 @@ export function LineageSearchPage(): React.JSX.Element {
 
     try {
       const response = await lineageAPI.searchEntities(query, 100);
-      const results: SearchResult[] = response.entities.map((entity: LineageEntity) => ({
-        id: entity.id,
-        name: lineageTableDisplayName(entity.properties),
-        routeTableName: lineageEntityRouteTableName(entity.properties),
-        description: lineageTableDescription(entity.properties),
-        layer: lineageTableLayer(entity.properties),
-      }));
+      const results = entitiesToSearchResults(response.entities);
 
       setTotalResults(results.length);
       setSearchResults(results);
+      setSuggestions(results);
       setCurrentPage(1);
     } catch (error) {
       console.error('Error searching entities:', error);
@@ -109,10 +121,10 @@ export function LineageSearchPage(): React.JSX.Element {
     handleSearch(searchQuery);
   };
 
-  const handleSuggestionClick = (suggestion: string): void => {
-    setSearchQuery(suggestion);
+  const handleSuggestionClick = (result: SearchResult): void => {
+    setSearchQuery(result.name);
     setShowSuggestions(false);
-    handleSearch(suggestion);
+    navigate(`/lineage/table/${encodeURIComponent(result.routeTableName)}`);
   };
 
   const paginatedResults = searchResults.slice(
@@ -140,13 +152,16 @@ export function LineageSearchPage(): React.JSX.Element {
 
             {showSuggestions && suggestions.length > 0 && (
               <div className="absolute left-0 right-0 top-full z-10 mt-2 max-h-60 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg">
-                {suggestions.map((suggestion, index) => (
+                {suggestions.map(suggestion => (
                   <div
-                    key={index}
+                    key={suggestion.id}
                     onClick={() => handleSuggestionClick(suggestion)}
-                    className="cursor-pointer px-4 py-3 text-gray-700 first:rounded-t-lg last:rounded-b-lg hover:bg-gray-50"
+                    className="cursor-pointer px-4 py-3 first:rounded-t-lg last:rounded-b-lg hover:bg-gray-50"
                   >
-                    {suggestion}
+                    <div className="text-sm font-medium text-gray-800">{suggestion.name}</div>
+                    {suggestion.description ? (
+                      <div className="mt-0.5 truncate text-xs text-gray-500">{suggestion.description}</div>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -165,7 +180,7 @@ export function LineageSearchPage(): React.JSX.Element {
             <div className="flex flex-col items-center justify-center py-20 text-gray-400">
               <SearchIcon className="mb-4 size-16 text-gray-300" />
               <p className="text-lg">输入关键词搜索血缘数据</p>
-              <p className="mt-2 text-sm">暂停输入 1 秒后将显示搜索建议</p>
+              <p className="mt-2 text-sm">暂停输入 1 秒后将自动搜索并显示结果</p>
             </div>
 
             {topTables.length > 0 && (

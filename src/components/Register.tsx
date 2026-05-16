@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UserIcon, LockIcon, MailIcon, EyeIcon, EyeOffIcon } from 'lucide-react';
+import { defaultAppPath } from '../config/appMode';
 import { authAPI, UserResponse, tokenStorage } from '../services/llmApi';
 
 export default function Register(): React.JSX.Element {
@@ -43,7 +44,7 @@ export default function Register(): React.JSX.Element {
       });
       tokenStorage.setUserToken(response.token.access_token);
       localStorage.setItem('user', JSON.stringify({ id: response.id, email: response.email, username: response.username }));
-      navigate('/chat');
+      navigate(defaultAppPath);
     } catch (err) {
       setError(err instanceof Error ? err.message : '注册失败，请重试');
     } finally {
