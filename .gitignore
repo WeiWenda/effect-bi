@@ -35,3 +35,13 @@ docker/stack/.env
 
 # Trino Gravitino plugin jars (sync downloads tarball: bash docker/stack/trino/sync-plugin-from-dev.sh)
 docker/stack/trino/plugin/gravitino/
+
+# Persistent data & runtime directories for docker-compose stack
+docker/stack/pgvector-data/
+docker/stack/neo4j-data/
+docker/stack/airflow-bind/logs/
+docker/stack/airflow-bind/plugins/
+docker/stack/airflow-bind/dags/
+docker/stack/airflow-bind/config/
+docker/stack/cube-home/.cubestore/
+docker/stack/cube-home/model/

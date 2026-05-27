@@ -34,7 +34,7 @@ services:
       POSTGRES_PASSWORD: ${STACK_POSTGRES_PASSWORD:-stacksecret}
       POSTGRES_DB: postgres
     volumes:
-      - pgvector-data:/var/lib/postgresql/data
+      - ${PGVECTOR_DATA_DIR:-./docker/stack/pgvector-data}:/var/lib/postgresql/data
       - ./docker/stack/pg-init:/docker-entrypoint-initdb.d:ro
     ports:
       - "${PGVECTOR_PUBLISH_PORT:-5434}:5432"
@@ -54,7 +54,7 @@ services:
       - "${NEO4J_HTTP_PORT:-7474}:7474"
       - "${NEO4J_BOLT_PORT:-7687}:7687"
     volumes:
-      - neo4j-data:/data
+      - ${NEO4J_DATA_DIR:-./docker/stack/neo4j-data}:/data
     restart: unless-stopped
 
   gravitino:
@@ -274,9 +274,6 @@ services:
     entrypoint: ["/bin/sh", "/run-effect-bi-demo-data.sh"]
     restart: "no"
 
-volumes:
-  pgvector-data:
-  neo4j-data:
 
 include:
   - path: docker/compose/airflow-services.yaml
